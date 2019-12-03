@@ -1,3 +1,10 @@
+#![deny(warnings)]
+#![deny(missing_docs)]
+
+//! # ingress_intel_rs
+//!
+//! Ingress Intel API interface in pure Rust
+
 use std::collections::HashMap;
 
 use futures_util::TryStreamExt;
@@ -19,9 +26,11 @@ use serde_json::json;
 mod tile_key;
 use tile_key::TileKey;
 
-mod entities;
+/// getEntities endpoint resource
+pub mod entities;
 
-mod portal_details;
+/// getPortalDetails endpoint resources
+pub mod portal_details;
 
 static INTEL_URLS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<a[^>]+href="([^"]+)""#).unwrap());
 static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<form[^>]+action="([^"]+)"[^>]+id="login_form"[^>]*>([\s\S]+)</form>"#).unwrap());
@@ -163,18 +172,20 @@ fn get_tile_keys_around(latitude: f64, longitude: f64) -> Vec<String> {
     ]
 }
 
+/// Represents an Ingress Intel web client login
 pub struct Intel<'a, C>
 where C: Connect + 'static {
     username: &'a str,
     password: &'a str,
-    client: Client<C>,
+    client: &'a Client<C>,
     cookies_jar: HashMap<String, String>,
     api_version: Option<String>,
 }
 
 impl<'a, C> Intel<'a, C>
 where C: Connect + 'static {
-    pub fn new(client: Client<C>, username: &'a str, password: &'a str) -> Self {
+    /// creates a new Ingress Intel web client login
+    pub fn new(client: &'a Client<C>, username: &'a str, password: &'a str) -> Self {
         Intel {
             username,
             password,
@@ -213,6 +224,7 @@ where C: Connect + 'static {
         Ok(())
     }
 
+    /// Retrieves entities informations for a given point
     pub async fn get_entities(&mut self, latitude: f64, longitude: f64) -> Result<entities::IntelResponse, ()> {
         self.login().await?;
 
@@ -231,6 +243,7 @@ where C: Connect + 'static {
             }), Some(body.to_string()), Some(&mut self.cookies_jar)).await
     }
 
+    /// Retrieves informations for a given portal
     pub async fn get_portal_details(&mut self, portal_id: &str) -> Result<portal_details::IntelResponse, ()> {
         self.login().await?;
 
@@ -278,7 +291,7 @@ mod tests {
         let https = HttpsConnector::new().map_err(|e| error!("error creating HttpsConnector: {}", e))?;
         let client = Client::builder().build::<_, Body>(https);
 
-        let mut intel = Intel::new(client, USERNAME.as_str(), PASSWORD.as_str());
+        let mut intel = Intel::new(&client, USERNAME.as_str(), PASSWORD.as_str());
         if let (Some(latitude), Some(longitude)) = (*LATITUDE, *LONGITUDE) {
             info!("get_entities {:?}", intel.get_entities(latitude, longitude).await?);
         }

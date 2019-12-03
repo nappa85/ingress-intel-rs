@@ -2,13 +2,11 @@
 Ingress Intel API interface in pure Rust
 
 ## WARNING
-Only Facebook login is supported, there are not plans for Google login support
+Only Facebook login is supported, there are no plans for Google login support
 
 ## Example
 
 ```rust
-use std::env;
-
 use hyper::{client::Client, Body};
 
 use hyper_tls::HttpsConnector;

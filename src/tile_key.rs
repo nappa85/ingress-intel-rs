@@ -22,17 +22,17 @@ fn lng2tile(longitude: f64, tiles_per_edge: f64) -> i64 {
     ((longitude + 180_f64) / 360_f64 * tiles_per_edge).floor() as i64
 }
 
-fn tile2lat(y: i64, tiles_per_edge: f64) -> f64 {
-    // double n = Math.PI - 2 * Math.PI * y / tilesPerEdge;
-    // return 180 / Math.PI * Math.atan(0.5d * (Math.exp(n) - Math.exp(-n)));
-    let n = PI - 2_f64 * PI * (y as f64) / tiles_per_edge;
-    180_f64 / PI * (0.5_f64 * (n.exp() - (-n).exp())).atan()
-}
+// fn tile2lat(y: i64, tiles_per_edge: f64) -> f64 {
+//     // double n = Math.PI - 2 * Math.PI * y / tilesPerEdge;
+//     // return 180 / Math.PI * Math.atan(0.5d * (Math.exp(n) - Math.exp(-n)));
+//     let n = PI - 2_f64 * PI * (y as f64) / tiles_per_edge;
+//     180_f64 / PI * (0.5_f64 * (n.exp() - (-n).exp())).atan()
+// }
 
-fn tile2lng(x: i64, tiles_per_edge: f64) -> f64 {
-    // return x / tilesPerEdge * 360 - 180;
-    (x as f64) / tiles_per_edge * 360_f64 - 180_f64
-}
+// fn tile2lng(x: i64, tiles_per_edge: f64) -> f64 {
+//     // return x / tilesPerEdge * 360 - 180;
+//     (x as f64) / tiles_per_edge * 360_f64 - 180_f64
+// }
 
 #[derive(Clone, Copy, Debug)]
 pub struct TileKey {
