@@ -123,10 +123,7 @@ where C: Connect + 'static,
             headers.insert("Referer", String::from("https://www.google.com/"));
             headers.insert("User-Agent", String::from("Nokia-MIT-Browser/3.0"));
             headers
-        }), None, match cookies_jar {
-            Some(ref mut cj) => Some(cj),
-            None => None,
-        }).await?;
+        }), None, None).await?;
 
     let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| error!("Facebook login form not found"))?;
     let url = format!("https://m.facebook.com{}", captures.get(1).map(|m| m.as_str()).ok_or_else(|| error!("Facebook login form URL not found"))?);
@@ -145,13 +142,21 @@ where C: Connect + 'static,
         .collect::<Vec<String>>()
         .join("&");
 
+    let mut temp_cookie_jar = HashMap::new();
     call(client, "POST", &url, Some({
             let mut headers = HashMap::new();
             headers.insert("Referer", String::from("https://m.facebook.com/"));
             headers.insert("User-Agent", String::from("Nokia-MIT-Browser/3.0"));
             headers.insert("Content-Type", String::from("application/x-www-form-urlencoded"));
             headers
-        }), Some(req_body), cookies_jar).await?;
+        }), Some(req_body), Some(&mut temp_cookie_jar)).await?;
+    temp_cookie_jar.get("c_user").ok_or_else(|| error!("Facebook login failed"))?;
+
+    if let Some(ref mut cj) = cookies_jar {
+        for (key, value) in temp_cookie_jar.into_iter() {
+            cj.insert(key, value);
+        }
+    }
 
     Ok(())
 }
