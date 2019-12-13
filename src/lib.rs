@@ -6,10 +6,11 @@
 //! Ingress Intel API interface in pure Rust
 
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use futures_util::TryStreamExt;
 
-use hyper::{client::{Client, connect::Connect}, Request, Body};
+use hyper::{service::Service, Request, Body, Response};
 
 use serde::de::DeserializeOwned;
 
@@ -38,38 +39,40 @@ static INPUT_FIELDS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<input[^>]+name="(
 static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
 static API_VERSION: Lazy<Regex> = Lazy::new(|| Regex::new(r#"/jsc/gen_dashboard_(\w+)\.js"#).unwrap());
 
-async fn call_and_deserialize<D, C>(client: &Client<C>, method: &str, url: &str, headers: Option<HashMap<&str, String>>, body: Option<String>, cookies_jar: Option<&mut HashMap<String, String>>) -> Result<D, ()>
+async fn call_and_deserialize<D, C, E>(client: &mut C, method: &str, url: &str, headers: Option<HashMap<&str, String>>, body: Option<String>, cookies_jar: Option<&mut HashMap<String, String>>) -> Result<D, ()>
 where D: DeserializeOwned,
-    C: Connect + 'static,
+    C: Service<Request<Body>, Response=Response<Body>, Error=E>,
+    E: Display,
 {
     let res = call(client, method, url, headers, body, cookies_jar).await?;
     serde_json::from_str(&res).map_err(|e| error!("error while decoding response from {}: {}\nbody: {}", url, e, res))
 }
 
-async fn call<C>(client: &Client<C>, method: &str, url: &str, headers: Option<HashMap<&str, String>>, body: Option<String>, mut cookies_jar: Option<&mut HashMap<String, String>>) -> Result<String, ()>
-where C: Connect + 'static,
+async fn call<C, E>(client: &mut C, method: &str, url: &str, headers: Option<HashMap<&str, String>>, body: Option<String>, mut cookies_jar: Option<&mut HashMap<String, String>>) -> Result<String, ()>
+where C: Service<Request<Body>, Response=Response<Body>, Error=E>,
+    E: Display,
 {
     let mut method = method;
     let mut url = url.to_string();
     let mut body = body;
     loop {
-        let mut builder = Request::builder();
-        builder.method(method).uri(&url);
+        let mut builder = Request::builder()
+            .method(method).uri(&url);
         if let Some(ref jar) = cookies_jar {
-            builder.header("Cookie", jar.iter().map(|(key, value)| format!("{}={}", key, value)).collect::<Vec<String>>().join("; "));
+            builder = builder.header("Cookie", jar.iter().map(|(key, value)| format!("{}={}", key, value)).collect::<Vec<String>>().join("; "));
         }
         if let Some(ref h) = headers {
             for (name, value) in h {
-                builder.header(*name, value);
+                builder = builder.header(*name, value);
             }
         }
         let req = builder.body(if let Some(b) = body { Body::from(b) } else { Body::empty() }).map_err(|e| error!("error building request to {}: {}", url, e))?;
 
-        let res = client.request(req).await.map_err(|e| error!("error receiving response from {}: {}", url, e))?;
+        let res = client.call(req).await.map_err(|e| error!("error receiving response from {}: {}", url, e))?;
         let success = res.status().is_success();
         let redirect = res.status().is_redirection();
         let (head, stream) = res.into_parts();
-        let chunks = stream.try_concat().await.map_err(|e| error!("error while reading response from {}: {}", url, e))?;
+        let chunks = stream.map_ok(|b| b.to_vec()).try_concat().await.map_err(|e| error!("error while reading response from {}: {}", url, e))?;
         let res_body = String::from_utf8(chunks.to_vec()).map_err(|e| error!("error while encoding response from {}: {}", url, e))?;
         if success || redirect {
             if let Some(ref mut jar) = cookies_jar {
@@ -115,8 +118,9 @@ where C: Connect + 'static,
     }
 }
 
-async fn facebook_login<C>(client: &Client<C>, username: &str, password: &str, mut cookies_jar: Option<&mut HashMap<String, String>>) -> Result<(), ()>
-where C: Connect + 'static,
+async fn facebook_login<C, E>(client: &mut C, username: &str, password: &str, mut cookies_jar: Option<&mut HashMap<String, String>>) -> Result<(), ()>
+where C: Service<Request<Body>, Response=Response<Body>, Error=E>,
+    E: Display,
 {
     let body = call(client, "GET", "https://m.facebook.com/", Some({
             let mut headers = HashMap::new();
@@ -178,19 +182,21 @@ fn get_tile_keys_around(latitude: f64, longitude: f64) -> Vec<String> {
 }
 
 /// Represents an Ingress Intel web client login
-pub struct Intel<'a, C>
-where C: Connect + 'static {
+pub struct Intel<'a, C, E>
+where C: Service<Request<Body>, Response=Response<Body>, Error=E>,
+    E: Display, {
     username: &'a str,
     password: &'a str,
-    client: &'a Client<C>,
+    client: &'a mut C,
     cookies_jar: HashMap<String, String>,
     api_version: Option<String>,
 }
 
-impl<'a, C> Intel<'a, C>
-where C: Connect + 'static {
+impl<'a, C, E> Intel<'a, C, E>
+where C: Service<Request<Body>, Response=Response<Body>, Error=E>,
+    E: Display, {
     /// creates a new Ingress Intel web client login
-    pub fn new(client: &'a Client<C>, username: &'a str, password: &'a str) -> Self {
+    pub fn new(client: &'a mut C, username: &'a str, password: &'a str) -> Self {
         Intel {
             username,
             password,
@@ -206,10 +212,10 @@ where C: Connect + 'static {
         }
 
         // login into facebook
-        facebook_login(&self.client, &self.username, &self.password, Some(&mut self.cookies_jar)).await?;
+        facebook_login(&mut self.client, &self.username, &self.password, Some(&mut self.cookies_jar)).await?;
 
         // retrieve facebook login url
-        let intel = call(&self.client, "GET", "https://intel.ingress.com/", None, None, None).await?;
+        let intel = call(&mut self.client, "GET", "https://intel.ingress.com/", None, None, None).await?;
         let url = INTEL_URLS.captures_iter(&intel)
             .map(|m| m.get(1).map(|s| s.as_str()))
             .filter(Option::is_some)
@@ -217,7 +223,7 @@ where C: Connect + 'static {
             .find(|s| s.starts_with("https://www.facebook.com/"))
             .ok_or_else(|| error!("Can't retrieve Intel's Facebook login URL"))?;
 
-        let intel = call(&self.client, "GET", url, Some({
+        let intel = call(&mut self.client, "GET", url, Some({
                 let mut headers = HashMap::new();
                 headers.insert("Referer", String::from("https://intel.ingress.com/"));
                 headers.insert("User-Agent", String::from("Nokia-MIT-Browser/3.0"));
@@ -237,7 +243,7 @@ where C: Connect + 'static {
             "tileKeys": get_tile_keys_around(latitude, longitude),
             "v": self.api_version.as_ref().unwrap(),
         });
-        call_and_deserialize(&self.client, "POST", "https://intel.ingress.com/r/getEntities", Some({
+        call_and_deserialize(&mut self.client, "POST", "https://intel.ingress.com/r/getEntities", Some({
                 let mut headers = HashMap::new();
                 headers.insert("Referer", String::from("https://intel.ingress.com/"));
                 headers.insert("Origin", String::from("https://intel.ingress.com/"));
@@ -256,7 +262,7 @@ where C: Connect + 'static {
             "guid": portal_id,
             "v": self.api_version.as_ref().unwrap(),
         });
-        call_and_deserialize(&self.client, "POST", "https://intel.ingress.com/r/getPortalDetails", Some({
+        call_and_deserialize(&mut self.client, "POST", "https://intel.ingress.com/r/getPortalDetails", Some({
                 let mut headers = HashMap::new();
                 headers.insert("Referer", String::from("https://intel.ingress.com/"));
                 headers.insert("Origin", String::from("https://intel.ingress.com/"));
@@ -281,7 +287,7 @@ mod tests {
 
     use once_cell::sync::Lazy;
 
-    use log::{error, info};
+    use log::info;
 
     static USERNAME: Lazy<String> = Lazy::new(|| env::var("USERNAME").expect("Missing USERNAME env var"));
     static PASSWORD: Lazy<String> = Lazy::new(|| env::var("PASSWORD").expect("Missing PASSWORD env var"));
@@ -293,10 +299,10 @@ mod tests {
     async fn login() -> Result<(), ()> {
         env_logger::try_init().ok();
 
-        let https = HttpsConnector::new().map_err(|e| error!("error creating HttpsConnector: {}", e))?;
-        let client = Client::builder().build::<_, Body>(https);
+        let https = HttpsConnector::new();
+        let mut client = Client::builder().build::<_, Body>(https);
 
-        let mut intel = Intel::new(&client, USERNAME.as_str(), PASSWORD.as_str());
+        let mut intel = Intel::new(&mut client, USERNAME.as_str(), PASSWORD.as_str());
         if let (Some(latitude), Some(longitude)) = (*LATITUDE, *LONGITUDE) {
             info!("get_entities {:?}", intel.get_entities(latitude, longitude).await?);
         }
