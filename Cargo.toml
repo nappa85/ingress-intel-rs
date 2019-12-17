@@ -1,6 +1,6 @@
 [package]
 name = "ingress_intel_rs"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Marco Napetti <marco.napetti@gmail.com>"]
 edition = "2018"
 
@@ -17,6 +17,6 @@ regex = "1.3"
 percent-encoding = "2.1"
 
 [dev-dependencies]
-tokio = { version = "0.2", features = ["full"] }
+tokio = "0.2"
 hyper-tls = "0.4"
 env_logger = "0.7"
