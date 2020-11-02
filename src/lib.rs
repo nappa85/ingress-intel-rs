@@ -28,6 +28,8 @@ pub mod entities;
 /// getPortalDetails endpoint resources
 pub mod portal_details;
 
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0";
+
 static INTEL_URLS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<a[^>]+href="([^"]+)""#).unwrap());
 static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<form[^>]+data-testid="royal_login_form"[^>]+action="([^"]+?)"[^>]+>([\s\S]+?)</form>"#).unwrap());
 static INPUT_FIELDS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<input([^>]+)>"#).unwrap());
@@ -42,9 +44,8 @@ async fn call(client: &Client, req: Request, cookie_store: &mut HashMap<String, 
         .map_err(|e| error!("error receiving response from {}: {}", url, e))?
         .error_for_status()
         .map_err(|e| error!("unsucessfull response from {}: {}", url, e))?;
-    log::debug!("headers {:?}", res.headers());
+
     res.cookies().for_each(|c| {
-        log::debug!("storing cookie {:?}", c);
         cookie_store.insert(c.name().to_owned(), c.value().to_owned());
     });
 
@@ -58,7 +59,7 @@ fn get_cookies(cookie_store: &HashMap<String, String>) -> String {
 async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &mut HashMap<String, String>) -> Result<(), ()> {
     let req = client.request(Method::GET, "https://www.facebook.com/?_fb_noscript=1")
         // .header("Referer", "https://www.google.com/")
-        .header("User-Agent", "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0")
+        .header("User-Agent", USER_AGENT)
         .build()
         .map_err(|e| error!("error building first facebook request: {}", e))?;
 
@@ -68,7 +69,7 @@ async fn facebook_login(client: &Client, username: &str, password: &str, cookie_
 
     let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| error!("Facebook login form not found"))?;
     let url = format!(
-        /*"http://localhost:3000{}",*/"https://www.facebook.com{}",
+        "https://www.facebook.com{}",
         captures.get(1)
             .and_then(|m| percent_decode_str(&m.as_str().replace("&amp;", "&")).decode_utf8().ok().map(|s| s.to_string()))
             .ok_or_else(|| error!("Facebook login form URL not found\nbody: {}", body))?
@@ -99,20 +100,18 @@ async fn facebook_login(client: &Client, username: &str, password: &str, cookie_
 
     fields["email"] = Value::from(username);
     fields["pass"] = Value::from(password);
-    log::debug!("fields {}", fields);
+
     let req = client.request(Method::POST, &url)
         // .header("Referer", "https://www.facebook.com/")
         // .header("Origin", "https://www.facebook.com/")
-        .header("User-Agent", "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0")
+        .header("User-Agent", USER_AGENT)
         .header("Cookie", get_cookies(cookie_store))
         .form(&fields)
         .build()
         .map_err(|e| error!("error building second facebook request: {}", e))?;
 
     let res = call(client, req, cookie_store).await?;
-    let temp = res.cookies().find(|c| c.name() == "c_user").map(|_| ());
-    // log::debug!("body: {}", res.text().await.unwrap());
-    temp.ok_or_else(|| error!("Facebook login failed"))?;
+    res.cookies().find(|c| c.name() == "c_user").ok_or_else(|| error!("Facebook login failed"))?;
 
     Ok(())
 }
@@ -135,8 +134,8 @@ fn get_tile_keys_around(latitude: f64, longitude: f64) -> Vec<String> {
 
 /// Represents an Ingress Intel web client login
 pub struct Intel<'a> {
-    username: &'a str,
-    password: &'a str,
+    username: Option<&'a str>,
+    password: Option<&'a str>,
     client: &'a Client,
     cookie_store: HashMap<String, String>,
     api_version: Option<String>,
@@ -145,7 +144,7 @@ pub struct Intel<'a> {
 
 impl<'a> Intel<'a> {
     /// creates a new Ingress Intel web client login
-    pub fn new(client: &'a Client, username: &'a str, password: &'a str) -> Self {
+    pub fn new(client: &'a Client, username: Option<&'a str>, password: Option<&'a str>) -> Self {
         Intel {
             username,
             password,
@@ -156,30 +155,30 @@ impl<'a> Intel<'a> {
         }
     }
 
-    // /// creates a new Ingress Intel web client login
-    // pub fn factory(username: &'a str, password: &'a str) -> Result<Self, ()> {
-    //     let client = Client::builder()
-    //         .cookie_store(true)
-    //         .user_agent("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0")
-    //         .build()
-    //         .map_err(|e| error!("error building client: {}", e))?;
-
-    //     Ok(Intel {
-    //         username,
-    //         password,
-    //         client: Cow::Owned(client),
-    //         api_version: None,
-    //         csrftoken: None,
-    //     })
-    // }
+    /// adds a cookie to the store
+    pub fn add_cookie<N, V>(&mut self, name: N, value: V)
+    where
+        N: ToString,
+        V: ToString,
+    {
+        self.cookie_store.insert(name.to_string(), value.to_string());
+    }
 
     async fn login(&mut self) -> Result<(), ()> {
         if self.api_version.is_some() {
             return Ok(());
         }
 
-        // login into facebook
-        facebook_login(&self.client, self.username.clone(), self.password.clone(), &mut self.cookie_store).await?;
+        // permits to add facebook cookie without generating it everytime
+        if self.cookie_store.get("c_user").is_none() {
+            // login into facebook
+            facebook_login(
+                &self.client,
+                self.username.ok_or_else(|| error!("Missing facebok username"))?,
+                self.password.ok_or_else(|| error!("Missing facebook password"))?,
+                &mut self.cookie_store
+            ).await?;
+        }
 
         // retrieve facebook login url
         let req = self.client.request(Method::GET, "https://intel.ingress.com/")
@@ -197,6 +196,7 @@ impl<'a> Intel<'a> {
             .ok_or_else(|| error!("Can't retrieve Intel's Facebook login URL"))?;
 
         let req = self.client.request(Method::GET, url)
+            .header("User-Agent", USER_AGENT)
             .header("Cookie", get_cookies(&self.cookie_store))
             .build()
             .map_err(|e| error!("error building second intel request: {}", e))?;
@@ -271,10 +271,11 @@ mod tests {
 
     use once_cell::sync::Lazy;
 
-    use log::info;//{error, info};
+    use log::info;
 
-    static USERNAME: Lazy<String> = Lazy::new(|| env::var("USERNAME").expect("Missing USERNAME env var"));
-    static PASSWORD: Lazy<String> = Lazy::new(|| env::var("PASSWORD").expect("Missing PASSWORD env var"));
+    static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
+    static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
+    static PASSWORD: Lazy<Option<String>> = Lazy::new(|| env::var("PASSWORD").ok());
     static LATITUDE: Lazy<Option<f64>> = Lazy::new(|| env::var("LATITUDE").map(|s| s.parse().expect("LATITUDE must be a float")).ok());
     static LONGITUDE: Lazy<Option<f64>> = Lazy::new(|| env::var("LONGITUDE").map(|s| s.parse().expect("LONGITUDE must be a float")).ok());
     static PORTAL_ID: Lazy<Option<String>> = Lazy::new(|| env::var("PORTAL_ID").ok());
@@ -283,16 +284,18 @@ mod tests {
     async fn login() -> Result<(), ()> {
         env_logger::try_init().ok();
 
-        let custom = reqwest::redirect::Policy::custom(|attempt| {
-            info!("attempt {:?}", attempt);
-            attempt.follow()
-        });
-        let client = Client::builder()
-            .redirect(custom)
-            .build()
-            .unwrap();
+        let client = Client::new();
 
-        let mut intel = Intel::new(&client, USERNAME.as_str(), PASSWORD.as_str());
+        let mut intel = Intel::new(&client, USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
+
+        if let Some(cookies) = &*COOKIES {
+            for cookie in cookies.split("; ") {
+                if let Some((pos, _)) = cookie.match_indices('=').next() {
+                    intel.add_cookie(&cookie[0..pos], &cookie[(pos + 1)..]);
+                }
+            }
+        }
+
         if let (Some(latitude), Some(longitude)) = (*LATITUDE, *LONGITUDE) {
             info!("get_entities {:?}", intel.get_entities(latitude, longitude).await?);
         }
