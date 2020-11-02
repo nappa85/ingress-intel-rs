@@ -5,6 +5,7 @@
 //!
 //! Ingress Intel API interface in pure Rust
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use reqwest::{Client, Method, Request, Response};
@@ -136,19 +137,31 @@ fn get_tile_keys_around(latitude: f64, longitude: f64) -> Vec<String> {
 pub struct Intel<'a> {
     username: Option<&'a str>,
     password: Option<&'a str>,
-    client: &'a Client,
+    client: Cow<'a, Client>,
     cookie_store: HashMap<String, String>,
     api_version: Option<String>,
     csrftoken: Option<String>,
 }
 
 impl<'a> Intel<'a> {
-    /// creates a new Ingress Intel web client login
+    /// creates a new Ingress Intel web client login from existing Client
     pub fn new(client: &'a Client, username: Option<&'a str>, password: Option<&'a str>) -> Self {
         Intel {
             username,
             password,
-            client: client,
+            client: Cow::Borrowed(client),
+            cookie_store: HashMap::new(),
+            api_version: None,
+            csrftoken: None,
+        }
+    }
+
+    /// creates a new Ingress Intel web client login
+    pub fn build(username: Option<&'a str>, password: Option<&'a str>) -> Self {
+        Intel {
+            username,
+            password,
+            client: Cow::Owned(Client::new()),
             cookie_store: HashMap::new(),
             api_version: None,
             csrftoken: None,
@@ -267,8 +280,6 @@ mod tests {
 
     use std::env;
 
-    use reqwest::Client;
-
     use once_cell::sync::Lazy;
 
     use log::info;
@@ -284,9 +295,7 @@ mod tests {
     async fn login() -> Result<(), ()> {
         env_logger::try_init().ok();
 
-        let client = Client::new();
-
-        let mut intel = Intel::new(&client, USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
+        let mut intel = Intel::build(USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
 
         if let Some(cookies) = &*COOKIES {
             for cookie in cookies.split("; ") {
