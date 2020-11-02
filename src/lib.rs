@@ -13,7 +13,7 @@ use once_cell::sync::Lazy;
 
 use regex::Regex;
 
-// use percent_encoding::percent_decode_str;
+use percent_encoding::percent_decode_str;
 
 use log::error;
 
@@ -29,7 +29,7 @@ pub mod entities;
 pub mod portal_details;
 
 static INTEL_URLS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<a[^>]+href="([^"]+)""#).unwrap());
-static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<form[^>]+action="([^"]+?)"[^>]+id="login_form"[^>]*>([\s\S]+)</form>"#).unwrap());
+static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<form[^>]+data-testid="royal_login_form"[^>]+action="([^"]+?)"[^>]+>([\s\S]+?)</form>"#).unwrap());
 static INPUT_FIELDS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<input([^>]+)>"#).unwrap());
 static INPUT_ATTRIBUTES: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^\s="]+)="([^"]+)""#).unwrap());
 // static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
@@ -44,6 +44,7 @@ async fn call(client: &Client, req: Request, cookie_store: &mut HashMap<String, 
         .map_err(|e| error!("unsucessfull response from {}: {}", url, e))?;
     log::debug!("headers {:?}", res.headers());
     res.cookies().for_each(|c| {
+        log::debug!("storing cookie {:?}", c);
         cookie_store.insert(c.name().to_owned(), c.value().to_owned());
     });
 
@@ -54,24 +55,10 @@ fn get_cookies(cookie_store: &HashMap<String, String>) -> String {
     cookie_store.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("; ")
 }
 
-//curl 'https://m.facebook.com/login/device-based/regular/login/?refsrc=https%3A%2F%2Fm.facebook.com%2F&lwv=100&refid=8'
-// -H 'User-Agent: Nokia5250/10.0.011 (SymbianOS/9.4; U; Series60/5.0 Mozilla/5.0; Profile/MIDP-2.1 Configuration/CLDC-1.1 ) AppleWebKit/525 (KHTML, like Gecko) Safari/525 3gpp-gba'
-// -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-// -H 'Accept-Language: it,en-US;q=0.7,en;q=0.3'
-// --compressed
-// -H 'Referer: https://m.facebook.com/'
-// -H 'Content-Type: application/x-www-form-urlencoded'
-// -H 'Origin: https://m.facebook.com'
-// -H 'DNT: 1'
-// -H 'Connection: keep-alive'
-// -H 'Cookie: datr=MTScXw4xeylVuyrY9sTzVYMI; sb=OTScX6qJF5Na0FADW7p_oywQ'
-// -H 'Upgrade-Insecure-Requests: 1'
-// -H 'TE: Trailers'
-// --data-raw 'lsd=AVoz4SZx8AI&jazoest=2923&m_ts=1604072505&li=OTScX-8XlwLE6tOSoPSRX3m1&try_number=0&unrecognized_tries=0&email=username%40example.com&pass=password&login=Accedi&_fb_noscript=true'
 async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &mut HashMap<String, String>) -> Result<(), ()> {
-    let req = client.request(Method::GET, "https://m.facebook.com/")
+    let req = client.request(Method::GET, "https://www.facebook.com/?_fb_noscript=1")
         // .header("Referer", "https://www.google.com/")
-        .header("User-Agent", "Nokia-MIT-Browser/3.0")
+        .header("User-Agent", "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0")
         .build()
         .map_err(|e| error!("error building first facebook request: {}", e))?;
 
@@ -81,10 +68,10 @@ async fn facebook_login(client: &Client, username: &str, password: &str, cookie_
 
     let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| error!("Facebook login form not found"))?;
     let url = format!(
-        /*"http://localhost:3000{}",*/"https://m.facebook.com{}",
+        /*"http://localhost:3000{}",*/"https://www.facebook.com{}",
         captures.get(1)
-            .map(|m| m.as_str().replace("&amp;", "&"))//.and_then(|m| percent_decode_str(&m.as_str().replace("&amp;", "&")).decode_utf8().ok().map(|s| s.to_string()))
-            .ok_or_else(|| error!("Facebook login form URL not found"))?
+            .and_then(|m| percent_decode_str(&m.as_str().replace("&amp;", "&")).decode_utf8().ok().map(|s| s.to_string()))
+            .ok_or_else(|| error!("Facebook login form URL not found\nbody: {}", body))?
     );
     let form = captures.get(2).map(|m| m.as_str()).ok_or_else(|| error!("Facebook login form contents not found"))?;
 
@@ -103,28 +90,28 @@ async fn facebook_login(client: &Client, username: &str, password: &str, cookie_
                     (name, value)
                 });
             if let Some(key) = name {
-                if key != "_fb_noscript" && key != "sign_up" {
+                // if key != "_fb_noscript" && key != "sign_up" {
                     fields[key] = Value::from(value.unwrap_or_else(|| ""));
-                }
+                // }
             }
         }
     }
 
     fields["email"] = Value::from(username);
     fields["pass"] = Value::from(password);
-
+    log::debug!("fields {}", fields);
     let req = client.request(Method::POST, &url)
-        // .header("Referer", "https://m.facebook.com/")
-        // .header("Origin", "https://m.facebook.com/")
-        .header("User-Agent", "Nokia-MIT-Browser/3.0")
-        // .header("Cookie", get_cookies(cookie_store))
+        // .header("Referer", "https://www.facebook.com/")
+        // .header("Origin", "https://www.facebook.com/")
+        .header("User-Agent", "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0")
+        .header("Cookie", get_cookies(cookie_store))
         .form(&fields)
         .build()
         .map_err(|e| error!("error building second facebook request: {}", e))?;
 
     let res = call(client, req, cookie_store).await?;
     let temp = res.cookies().find(|c| c.name() == "c_user").map(|_| ());
-    log::debug!("body: {}", res.text().await.unwrap());
+    // log::debug!("body: {}", res.text().await.unwrap());
     temp.ok_or_else(|| error!("Facebook login failed"))?;
 
     Ok(())
@@ -173,7 +160,7 @@ impl<'a> Intel<'a> {
     // pub fn factory(username: &'a str, password: &'a str) -> Result<Self, ()> {
     //     let client = Client::builder()
     //         .cookie_store(true)
-    //         .user_agent("Nokia-MIT-Browser/3.0")
+    //         .user_agent("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0")
     //         .build()
     //         .map_err(|e| error!("error building client: {}", e))?;
 
