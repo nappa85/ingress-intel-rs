@@ -1,22 +1,20 @@
 [package]
 name = "ingress_intel_rs"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["Marco Napetti <marco.napetti@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-futures-util = "0.3"
-hyper = { version = "0.13", features = ["stream"] }
+reqwest = { version = "0.10", features = ["cookies", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-once_cell = "1.2"
+once_cell = "1.4"
 log = "0.4"
-regex = "1.3"
-percent-encoding = "2.1"
+regex = "1.4"
+# percent-encoding = "2.1"
 
 [dev-dependencies]
-tokio = "0.2"
-hyper-tls = "0.4"
-env_logger = "0.7"
+tokio = { version= "0.2", features = ["macros"] }
+env_logger = "0.8"

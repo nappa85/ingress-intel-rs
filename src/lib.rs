@@ -7,21 +7,17 @@
 
 use std::collections::HashMap;
 
-use futures_util::TryStreamExt;
-
-use hyper::{client::{Client, connect::Connect}, Request, Body};
-
-use serde::de::DeserializeOwned;
+use reqwest::{Client, Method, Request, Response};
 
 use once_cell::sync::Lazy;
 
 use regex::Regex;
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+// use percent_encoding::percent_decode_str;
 
 use log::error;
 
-use serde_json::json;
+use serde_json::{json, value::Value};
 
 mod tile_key;
 use tile_key::TileKey;
@@ -33,130 +29,103 @@ pub mod entities;
 pub mod portal_details;
 
 static INTEL_URLS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<a[^>]+href="([^"]+)""#).unwrap());
-static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<form[^>]+action="([^"]+)"[^>]+id="login_form"[^>]*>([\s\S]+)</form>"#).unwrap());
-static INPUT_FIELDS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<input[^>]+name="([^"]+)"[^>]*(value="([^"]+)")?"#).unwrap());
-static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
+static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<form[^>]+action="([^"]+?)"[^>]+id="login_form"[^>]*>([\s\S]+)</form>"#).unwrap());
+static INPUT_FIELDS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<input([^>]+)>"#).unwrap());
+static INPUT_ATTRIBUTES: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^\s="]+)="([^"]+)""#).unwrap());
+// static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
 static API_VERSION: Lazy<Regex> = Lazy::new(|| Regex::new(r#"/jsc/gen_dashboard_(\w+)\.js"#).unwrap());
 
-async fn call_and_deserialize<D, C>(client: &Client<C>, method: &str, url: &str, headers: Option<HashMap<&str, String>>, body: Option<String>, cookies_jar: Option<&mut HashMap<String, String>>) -> Result<D, ()>
-where D: DeserializeOwned,
-    C: Connect + Clone + Send + Sync + 'static,
-{
-    let res = call(client, method, url, headers, body, cookies_jar).await?;
-    serde_json::from_str(&res).map_err(|e| error!("error while decoding response from {}: {}\nbody: {}", url, e, res))
-}
-
-async fn call<C>(client: &Client<C>, method: &str, url: &str, headers: Option<HashMap<&str, String>>, body: Option<String>, mut cookies_jar: Option<&mut HashMap<String, String>>) -> Result<String, ()>
-where C: Connect + Clone + Send + Sync + 'static,
-{
-    let mut method = method;
-    let mut url = url.to_string();
-    let mut body = body;
-    loop {
-        let mut builder = Request::builder()
-            .method(method).uri(&url);
-        if let Some(ref jar) = cookies_jar {
-            builder = builder.header("Cookie", jar.iter().map(|(key, value)| format!("{}={}", key, value)).collect::<Vec<String>>().join("; "));
-        }
-        if let Some(ref h) = headers {
-            for (name, value) in h {
-                builder = builder.header(*name, value);
-            }
-        }
-        let req = builder.body(if let Some(b) = body { Body::from(b) } else { Body::empty() }).map_err(|e| error!("error building request to {}: {}", url, e))?;
-
-        let res = client.request(req).await.map_err(|e| error!("error receiving response from {}: {}", url, e))?;
-        let success = res.status().is_success();
-        let redirect = res.status().is_redirection();
-        let (head, stream) = res.into_parts();
-        let chunks = stream.map_ok(|c| c.to_vec()).try_concat().await.map_err(|e| error!("error while reading response from {}: {}", url, e))?;
-        let res_body = String::from_utf8(chunks).map_err(|e| error!("error while encoding response from {}: {}", url, e))?;
-        if success || redirect {
-            if let Some(ref mut jar) = cookies_jar {
-                head.headers.get_all("Set-Cookie").into_iter().for_each(|c| {
-                    if let Ok(s) = c.to_str() {
-                        if let Some(captures) = COOKIE.captures(s) {
-                            match (captures.get(1), captures.get(2)) {
-                                (Some(key), Some(value)) => {
-                                    jar.insert(key.as_str().to_string(), value.as_str().to_string());
-                                },
-                                _ => {},
-                            }
-                        }
-                    }
-                });
-            }
-
-            if success {
-                return Ok(res_body);
-            }
-            else {
-                if let Some(location) = head.headers.get("Location") {
-                    method = "GET";
-                    let location = location.to_str().map_err(|e| error!("Location header decode error: {}", e))?;
-                    if location.starts_with("http") {
-                        url = location.to_string();
-                    }
-                    else {
-                        url = format!("{}{}", url.split("/").take(3).collect::<Vec<&str>>().join("/"), location);
-                    }
-                    body = None;
-                }
-                else {
-                    error!("Locationless redirect");
-                    return Err(());
-                }
-            }
-        }
-        else {
-            error!("unsucessfull response from {}: {:?}\nbody: {}", url, head, res_body);
-            return Err(());
-        }
-    }
-}
-
-async fn facebook_login<C>(client: &Client<C>, username: &str, password: &str, mut cookies_jar: Option<&mut HashMap<String, String>>) -> Result<(), ()>
-where C: Connect + Clone + Send + Sync + 'static,
-{
-    let body = call(client, "GET", "https://m.facebook.com/", Some({
-            let mut headers = HashMap::new();
-            headers.insert("Referer", String::from("https://www.google.com/"));
-            headers.insert("User-Agent", String::from("Nokia-MIT-Browser/3.0"));
-            headers
-        }), None, None).await?;
-
-    let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| error!("Facebook login form not found"))?;
-    let url = format!("https://m.facebook.com{}", captures.get(1).map(|m| m.as_str()).ok_or_else(|| error!("Facebook login form URL not found"))?);
-    let form = captures.get(2).map(|m| m.as_str()).ok_or_else(|| error!("Facebook login form contents not found"))?;
-
-    let mut fields = HashMap::new();
-    INPUT_FIELDS.captures_iter(form).for_each(|m| if let Some(key) = m.get(1) {
-        fields.insert(key.as_str(), m.get(3).map(|s| s.as_str()).unwrap_or_else(|| ""));
+async fn call(client: &Client, req: Request, cookie_store: &mut HashMap<String, String>) -> Result<Response, ()> {
+    let url = req.url().to_string();
+    let res = client.execute(req)
+        .await
+        .map_err(|e| error!("error receiving response from {}: {}", url, e))?
+        .error_for_status()
+        .map_err(|e| error!("unsucessfull response from {}: {}", url, e))?;
+    log::debug!("headers {:?}", res.headers());
+    res.cookies().for_each(|c| {
+        cookie_store.insert(c.name().to_owned(), c.value().to_owned());
     });
 
-    *(fields.get_mut("email").ok_or_else(|| error!("Facebook email field not found"))?) = username;
-    *(fields.get_mut("pass").ok_or_else(|| error!("Facebook pass field not found"))?) = password;
+    Ok(res)
+}
 
-    let req_body = fields.into_iter()
-        .map(|(key, value)| format!("{}={}", utf8_percent_encode(key, NON_ALPHANUMERIC), utf8_percent_encode(value, NON_ALPHANUMERIC)))
-        .collect::<Vec<String>>()
-        .join("&");
+fn get_cookies(cookie_store: &HashMap<String, String>) -> String {
+    cookie_store.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("; ")
+}
 
-    let mut temp_cookie_jar = HashMap::new();
-    call(client, "POST", &url, Some({
-            let mut headers = HashMap::new();
-            headers.insert("Referer", String::from("https://m.facebook.com/"));
-            headers.insert("User-Agent", String::from("Nokia-MIT-Browser/3.0"));
-            headers.insert("Content-Type", String::from("application/x-www-form-urlencoded"));
-            headers
-        }), Some(req_body), Some(&mut temp_cookie_jar)).await?;
-    temp_cookie_jar.get("c_user").ok_or_else(|| error!("Facebook login failed"))?;
+//curl 'https://m.facebook.com/login/device-based/regular/login/?refsrc=https%3A%2F%2Fm.facebook.com%2F&lwv=100&refid=8'
+// -H 'User-Agent: Nokia5250/10.0.011 (SymbianOS/9.4; U; Series60/5.0 Mozilla/5.0; Profile/MIDP-2.1 Configuration/CLDC-1.1 ) AppleWebKit/525 (KHTML, like Gecko) Safari/525 3gpp-gba'
+// -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+// -H 'Accept-Language: it,en-US;q=0.7,en;q=0.3'
+// --compressed
+// -H 'Referer: https://m.facebook.com/'
+// -H 'Content-Type: application/x-www-form-urlencoded'
+// -H 'Origin: https://m.facebook.com'
+// -H 'DNT: 1'
+// -H 'Connection: keep-alive'
+// -H 'Cookie: datr=MTScXw4xeylVuyrY9sTzVYMI; sb=OTScX6qJF5Na0FADW7p_oywQ'
+// -H 'Upgrade-Insecure-Requests: 1'
+// -H 'TE: Trailers'
+// --data-raw 'lsd=AVoz4SZx8AI&jazoest=2923&m_ts=1604072505&li=OTScX-8XlwLE6tOSoPSRX3m1&try_number=0&unrecognized_tries=0&email=username%40example.com&pass=password&login=Accedi&_fb_noscript=true'
+async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &mut HashMap<String, String>) -> Result<(), ()> {
+    let req = client.request(Method::GET, "https://m.facebook.com/")
+        // .header("Referer", "https://www.google.com/")
+        .header("User-Agent", "Nokia-MIT-Browser/3.0")
+        .build()
+        .map_err(|e| error!("error building first facebook request: {}", e))?;
 
-    if let Some(ref mut cj) = cookies_jar {
-        for (key, value) in temp_cookie_jar.into_iter() {
-            cj.insert(key, value);
+    let body = call(client, req, cookie_store).await?
+        .text().await
+        .map_err(|e| error!("error encoding response text: {}", e))?;
+
+    let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| error!("Facebook login form not found"))?;
+    let url = format!(
+        /*"http://localhost:3000{}",*/"https://m.facebook.com{}",
+        captures.get(1)
+            .map(|m| m.as_str().replace("&amp;", "&"))//.and_then(|m| percent_decode_str(&m.as_str().replace("&amp;", "&")).decode_utf8().ok().map(|s| s.to_string()))
+            .ok_or_else(|| error!("Facebook login form URL not found"))?
+    );
+    let form = captures.get(2).map(|m| m.as_str()).ok_or_else(|| error!("Facebook login form contents not found"))?;
+
+    let mut fields = Value::Null;
+    for m in INPUT_FIELDS.captures_iter(form) {
+        if let Some(input) = m.get(1) {
+            let (name, value) = INPUT_ATTRIBUTES.captures_iter(input.as_str())
+                .fold((None, None), |(mut name, mut value), im| {
+                    let key = im.get(1).map(|s| s.as_str());
+                    if key == Some("name") {
+                        name = im.get(2).map(|s| s.as_str());
+                    }
+                    else if key == Some("value") {
+                        value = im.get(2).map(|s| s.as_str());
+                    }
+                    (name, value)
+                });
+            if let Some(key) = name {
+                if key != "_fb_noscript" && key != "sign_up" {
+                    fields[key] = Value::from(value.unwrap_or_else(|| ""));
+                }
+            }
         }
     }
+
+    fields["email"] = Value::from(username);
+    fields["pass"] = Value::from(password);
+
+    let req = client.request(Method::POST, &url)
+        // .header("Referer", "https://m.facebook.com/")
+        // .header("Origin", "https://m.facebook.com/")
+        .header("User-Agent", "Nokia-MIT-Browser/3.0")
+        // .header("Cookie", get_cookies(cookie_store))
+        .form(&fields)
+        .build()
+        .map_err(|e| error!("error building second facebook request: {}", e))?;
+
+    let res = call(client, req, cookie_store).await?;
+    let temp = res.cookies().find(|c| c.name() == "c_user").map(|_| ());
+    log::debug!("body: {}", res.text().await.unwrap());
+    temp.ok_or_else(|| error!("Facebook login failed"))?;
 
     Ok(())
 }
@@ -178,27 +147,44 @@ fn get_tile_keys_around(latitude: f64, longitude: f64) -> Vec<String> {
 }
 
 /// Represents an Ingress Intel web client login
-pub struct Intel<'a, C>
-where C: Connect + Clone + Send + Sync + 'static {
+pub struct Intel<'a> {
     username: &'a str,
     password: &'a str,
-    client: &'a Client<C>,
-    cookies_jar: HashMap<String, String>,
+    client: &'a Client,
+    cookie_store: HashMap<String, String>,
     api_version: Option<String>,
+    csrftoken: Option<String>,
 }
 
-impl<'a, C> Intel<'a, C>
-where C: Connect + Clone + Send + Sync + 'static {
+impl<'a> Intel<'a> {
     /// creates a new Ingress Intel web client login
-    pub fn new(client: &'a Client<C>, username: &'a str, password: &'a str) -> Self {
+    pub fn new(client: &'a Client, username: &'a str, password: &'a str) -> Self {
         Intel {
             username,
             password,
-            client,
-            cookies_jar: HashMap::new(),
+            client: client,
+            cookie_store: HashMap::new(),
             api_version: None,
+            csrftoken: None,
         }
     }
+
+    // /// creates a new Ingress Intel web client login
+    // pub fn factory(username: &'a str, password: &'a str) -> Result<Self, ()> {
+    //     let client = Client::builder()
+    //         .cookie_store(true)
+    //         .user_agent("Nokia-MIT-Browser/3.0")
+    //         .build()
+    //         .map_err(|e| error!("error building client: {}", e))?;
+
+    //     Ok(Intel {
+    //         username,
+    //         password,
+    //         client: Cow::Owned(client),
+    //         api_version: None,
+    //         csrftoken: None,
+    //     })
+    // }
 
     async fn login(&mut self) -> Result<(), ()> {
         if self.api_version.is_some() {
@@ -206,10 +192,16 @@ where C: Connect + Clone + Send + Sync + 'static {
         }
 
         // login into facebook
-        facebook_login(&self.client, &self.username, &self.password, Some(&mut self.cookies_jar)).await?;
+        facebook_login(&self.client, self.username.clone(), self.password.clone(), &mut self.cookie_store).await?;
 
         // retrieve facebook login url
-        let intel = call(&self.client, "GET", "https://intel.ingress.com/", None, None, None).await?;
+        let req = self.client.request(Method::GET, "https://intel.ingress.com/")
+            .build()
+            .map_err(|e| error!("error building first intel request: {}", e))?;
+        let intel = call(&self.client, req, &mut self.cookie_store).await?
+            .text()
+            .await
+            .map_err(|e| error!("error encoding first intel response: {}", e))?;
         let url = INTEL_URLS.captures_iter(&intel)
             .map(|m| m.get(1).map(|s| s.as_str()))
             .filter(Option::is_some)
@@ -217,12 +209,15 @@ where C: Connect + Clone + Send + Sync + 'static {
             .find(|s| s.starts_with("https://www.facebook.com/"))
             .ok_or_else(|| error!("Can't retrieve Intel's Facebook login URL"))?;
 
-        let intel = call(&self.client, "GET", url, Some({
-                let mut headers = HashMap::new();
-                headers.insert("Referer", String::from("https://intel.ingress.com/"));
-                headers.insert("User-Agent", String::from("Nokia-MIT-Browser/3.0"));
-                headers
-            }), None, Some(&mut self.cookies_jar)).await?;
+        let req = self.client.request(Method::GET, url)
+            .header("Cookie", get_cookies(&self.cookie_store))
+            .build()
+            .map_err(|e| error!("error building second intel request: {}", e))?;
+        let res = call(&self.client, req, &mut self.cookie_store).await?;
+        self.csrftoken = res.cookies().find(|c| c.name() == "csrftoken").map(|c| c.value().to_string());
+        let intel = res.text()
+            .await
+            .map_err(|e| error!("error encoding second intel response: {}", e))?;
         let captures = API_VERSION.captures(&intel).ok_or_else(|| error!("Can't find Intel API version"))?;
         self.api_version = Some(captures.get(1).map(|m| m.as_str().to_owned()).ok_or_else(|| error!("Can't read Intel API version"))?);
 
@@ -235,17 +230,22 @@ where C: Connect + Clone + Send + Sync + 'static {
 
         let body = json!({
             "tileKeys": get_tile_keys_around(latitude, longitude),
-            "v": self.api_version.as_ref().unwrap(),
+            "v": self.api_version.as_ref().ok_or_else(|| error!("missing API version"))?,
         });
-        call_and_deserialize(&self.client, "POST", "https://intel.ingress.com/r/getEntities", Some({
-                let mut headers = HashMap::new();
-                headers.insert("Referer", String::from("https://intel.ingress.com/"));
-                headers.insert("Origin", String::from("https://intel.ingress.com/"));
-                headers.insert("Content-Type", String::from("application/json"));
-                headers.insert("X-CSRFToken", self.cookies_jar["csrftoken"].clone());
-				// headers.insert("User-Agent", String::from("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.142 Safari/537.36"));
-                headers
-            }), Some(body.to_string()), Some(&mut self.cookies_jar)).await
+
+        let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getEntities")
+            .header("Referer", "https://intel.ingress.com/")
+            .header("Origin", "https://intel.ingress.com/")
+            .header("Cookie", get_cookies(&self.cookie_store))
+            .header("X-CSRFToken", self.csrftoken.as_ref().ok_or_else(|| error!("missing CSRFToken"))?)
+            .json(&body)
+            .build()
+            .map_err(|e| error!("error building entities request: {}", e))?;
+
+        call(&self.client, req, &mut self.cookie_store).await?
+            .json()
+            .await
+            .map_err(|e| error!("error deserializing entities response: {}", e))
     }
 
     /// Retrieves informations for a given portal
@@ -256,15 +256,20 @@ where C: Connect + Clone + Send + Sync + 'static {
             "guid": portal_id,
             "v": self.api_version.as_ref().unwrap(),
         });
-        call_and_deserialize(&self.client, "POST", "https://intel.ingress.com/r/getPortalDetails", Some({
-                let mut headers = HashMap::new();
-                headers.insert("Referer", String::from("https://intel.ingress.com/"));
-                headers.insert("Origin", String::from("https://intel.ingress.com/"));
-                headers.insert("Content-Type", String::from("application/json"));
-                headers.insert("X-CSRFToken", self.cookies_jar["csrftoken"].clone());
-				// headers.insert("User-Agent", String::from("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.142 Safari/537.36"));
-                headers
-            }), Some(body.to_string()), Some(&mut self.cookies_jar)).await
+
+        let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getPortalDetails")
+            .header("Referer", "https://intel.ingress.com/")
+            .header("Origin", "https://intel.ingress.com/")
+            .header("Cookie", get_cookies(&self.cookie_store))
+            .header("X-CSRFToken", self.csrftoken.as_ref().ok_or_else(|| error!("missing CSRFToken"))?)
+            .json(&body)
+            .build()
+            .map_err(|e| error!("error building portal details request: {}", e))?;
+
+        call(&self.client, req, &mut self.cookie_store).await?
+            .json()
+            .await
+            .map_err(|e| error!("error deserializing portal details response: {}", e))
     }
 }
 
@@ -275,13 +280,11 @@ mod tests {
 
     use std::env;
 
-    use hyper::{client::Client, Body};
-
-    use hyper_tls::HttpsConnector;
+    use reqwest::Client;
 
     use once_cell::sync::Lazy;
 
-    use log::{error, info};
+    use log::info;//{error, info};
 
     static USERNAME: Lazy<String> = Lazy::new(|| env::var("USERNAME").expect("Missing USERNAME env var"));
     static PASSWORD: Lazy<String> = Lazy::new(|| env::var("PASSWORD").expect("Missing PASSWORD env var"));
@@ -293,8 +296,14 @@ mod tests {
     async fn login() -> Result<(), ()> {
         env_logger::try_init().ok();
 
-        let https = HttpsConnector::new().map_err(|e| error!("error creating HttpsConnector: {}", e))?;
-        let client = Client::builder().build::<_, Body>(https);
+        let custom = reqwest::redirect::Policy::custom(|attempt| {
+            info!("attempt {:?}", attempt);
+            attempt.follow()
+        });
+        let client = Client::builder()
+            .redirect(custom)
+            .build()
+            .unwrap();
 
         let mut intel = Intel::new(&client, USERNAME.as_str(), PASSWORD.as_str());
         if let (Some(latitude), Some(longitude)) = (*LATITUDE, *LONGITUDE) {
