@@ -7,18 +7,42 @@ Only Facebook login is supported, there are no plans for Google login support
 ## Example
 
 ```rust
-use hyper::{client::Client, Body};
-
-use hyper_tls::HttpsConnector;
+use reqwest::Client;
 
 use ingress_intel_rs::Intel;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
-    let https = HttpsConnector::new().unwrap();
-    let client = Client::builder().build::<_, Body>(https);
+    let client = Client::new();
 
-    let mut intel = Intel::new(client, "your@facebook.email", "your_facebook_password");
+    let mut intel = Intel::new(client, Some("your@facebook.email"), Some("your_facebook_password"));
+    println!("get_portal_details {:?}", intel.get_portal_details("your_portal_id").await?);
+
+    Ok(())
+}
+```
+
+## WARNING 2
+Facebook often blocks suspect login attempts, a workaround can be to pass directly valid cookie values taken from your browser
+
+## Example 2
+
+```rust
+use reqwest::Client;
+
+use ingress_intel_rs::Intel;
+
+#[tokio::main]
+async fn main() -> Result<(), ()> {
+    let client = Client::new();
+
+    let mut intel = Intel::new(client, None, None);
+    intel.add_cookie("datr", "datr_cookie_value");
+    intel.add_cookie("sb", "sb_cookie_value");
+    intel.add_cookie("fr", "fr_cookie_value");
+    intel.add_cookie("c_user", "c_user_cookie_value");
+    intel.add_cookie("xs", "xs_cookie_value");
+    intel.add_cookie("spin", "spin_cookie_value");
     println!("get_portal_details {:?}", intel.get_portal_details("your_portal_id").await?);
 
     Ok(())
