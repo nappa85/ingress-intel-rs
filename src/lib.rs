@@ -182,31 +182,38 @@ impl<'a> Intel<'a> {
             return Ok(());
         }
 
-        // permits to add facebook cookie without generating it everytime
-        if self.cookie_store.get("c_user").is_none() {
-            // login into facebook
-            facebook_login(
-                &self.client,
-                self.username.ok_or_else(|| error!("Missing facebok username"))?,
-                self.password.ok_or_else(|| error!("Missing facebook password"))?,
-                &mut self.cookie_store
-            ).await?;
-        }
+        // permits to add intel cookie without generating it everytime
+        let url = if self.cookie_store.get("csrftoken").is_none() {
+            // permits to add facebook cookie without generating it everytime
+            if self.cookie_store.get("c_user").is_none() {
+                // login into facebook
+                facebook_login(
+                    &self.client,
+                    self.username.ok_or_else(|| error!("Missing facebok username"))?,
+                    self.password.ok_or_else(|| error!("Missing facebook password"))?,
+                    &mut self.cookie_store
+                ).await?;
+            }
 
-        // retrieve facebook login url
-        let req = self.client.request(Method::GET, "https://intel.ingress.com/")
-            .build()
-            .map_err(|e| error!("error building first intel request: {}", e))?;
-        let intel = call(&self.client, req, &mut self.cookie_store).await?
-            .text()
-            .await
-            .map_err(|e| error!("error encoding first intel response: {}", e))?;
-        let url = INTEL_URLS.captures_iter(&intel)
-            .map(|m| m.get(1).map(|s| s.as_str()))
-            .filter(Option::is_some)
-            .map(Option::unwrap)
-            .find(|s| s.starts_with("https://www.facebook.com/"))
-            .ok_or_else(|| error!("Can't retrieve Intel's Facebook login URL"))?;
+            // retrieve facebook login url
+            let req = self.client.request(Method::GET, "https://intel.ingress.com/")
+                .build()
+                .map_err(|e| error!("error building first intel request: {}", e))?;
+            let intel = call(&self.client, req, &mut self.cookie_store).await?
+                .text()
+                .await
+                .map_err(|e| error!("error encoding first intel response: {}", e))?;
+            INTEL_URLS.captures_iter(&intel)
+                .map(|m| m.get(1).map(|s| s.as_str()))
+                .filter(Option::is_some)
+                .map(Option::unwrap)
+                .find(|s| s.starts_with("https://www.facebook.com/"))
+                .ok_or_else(|| error!("Can't retrieve Intel's Facebook login URL"))?
+                .to_owned()
+        }
+        else {
+            String::from("https://intel.ingress.com/")
+        };
 
         let req = self.client.request(Method::GET, url)
             .header("User-Agent", USER_AGENT)
@@ -218,6 +225,7 @@ impl<'a> Intel<'a> {
         let intel = res.text()
             .await
             .map_err(|e| error!("error encoding second intel response: {}", e))?;
+
         let captures = API_VERSION.captures(&intel).ok_or_else(|| error!("Can't find Intel API version"))?;
         self.api_version = Some(captures.get(1).map(|m| m.as_str().to_owned()).ok_or_else(|| error!("Can't read Intel API version"))?);
 
