@@ -16,9 +16,9 @@ use regex::Regex;
 
 use percent_encoding::percent_decode_str;
 
-use log::error;
-
 use serde_json::{json, value::Value};
+
+use tracing::error;
 
 mod tile_key;
 use tile_key::TileKey;
@@ -28,6 +28,9 @@ pub mod entities;
 
 /// getPortalDetails endpoint resources
 pub mod portal_details;
+
+/// getPlexts endpoint resources
+pub mod plexts;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0";
 
@@ -279,6 +282,36 @@ impl<'a> Intel<'a> {
             .await
             .map_err(|e| error!("error deserializing portal details response: {}", e))
     }
+
+    /// Retrieves COMM contents
+    pub async fn get_plexts(&mut self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab) -> Result<plexts::IntelResponse, ()> {
+        self.login().await?;
+
+        let body = json!({
+            "minLatE6": from[0],
+            "minLngE6": from[1],
+            "maxLatE6": to[0],
+            "maxLngE6": to[1],
+            "minTimestampMs":-1,
+            "maxTimestampMs":-1,
+            "tab": tab,
+            "v": self.api_version.as_ref().unwrap(),
+        });
+
+        let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getPlexts")
+            .header("Referer", "https://intel.ingress.com/")
+            .header("Origin", "https://intel.ingress.com/")
+            .header("Cookie", get_cookies(&self.cookie_store))
+            .header("X-CSRFToken", self.csrftoken.as_ref().ok_or_else(|| error!("missing CSRFToken"))?)
+            .json(&body)
+            .build()
+            .map_err(|e| error!("error building portal details request: {}", e))?;
+
+        call(&self.client, req, &mut self.cookie_store).await?
+            .json()
+            .await
+            .map_err(|e| error!("error deserializing portal details response: {}", e))
+    }
 }
 
 
@@ -290,7 +323,7 @@ mod tests {
 
     use once_cell::sync::Lazy;
 
-    use log::info;
+    use tracing::info;
 
     static COOKIES: Lazy<Option<String>> = Lazy::new(|| env::var("COOKIES").ok());
     static USERNAME: Lazy<Option<String>> = Lazy::new(|| env::var("USERNAME").ok());
@@ -301,7 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn login() -> Result<(), ()> {
-        env_logger::try_init().ok();
+        tracing_subscriber::fmt::try_init().ok();
 
         let mut intel = Intel::build(USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
 
