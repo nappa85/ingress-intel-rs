@@ -284,7 +284,7 @@ impl<'a> Intel<'a> {
     }
 
     /// Retrieves COMM contents
-    pub async fn get_plexts(&mut self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab) -> Result<plexts::IntelResponse, ()> {
+    pub async fn get_plexts(&mut self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab, min_timestamp_ms: Option<i64>, max_timestamp_ms: Option<i64>) -> Result<plexts::IntelResponse, ()> {
         self.login().await?;
 
         let body = json!({
@@ -292,8 +292,8 @@ impl<'a> Intel<'a> {
             "minLngE6": from[1],
             "maxLatE6": to[0],
             "maxLngE6": to[1],
-            "minTimestampMs":-1,
-            "maxTimestampMs":-1,
+            "minTimestampMs": min_timestamp_ms.unwrap_or(-1),
+            "maxTimestampMs": max_timestamp_ms.unwrap_or(-1),
             "tab": tab,
             "v": self.api_version.as_ref().unwrap(),
         });
