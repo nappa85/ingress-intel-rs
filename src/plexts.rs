@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 /// intermediate plext construct
-pub type IntelPlext = (String, u64, PlextWrapper);
+pub type IntelPlext = (String, i64, PlextWrapper);
 /// intermediate markup construct
 pub type Markup = (String, MarkupElement);
 
