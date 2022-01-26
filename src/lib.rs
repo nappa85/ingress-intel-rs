@@ -209,9 +209,9 @@ impl<'a> Intel<'a> {
         }
 
         // permits to add intel cookie without generating it everytime
-        let url = if self.cookie_exists("csrftoken").await {
+        let url = if !self.cookie_exists("csrftoken").await {
             // permits to add facebook cookie without generating it everytime
-            if self.cookie_exists("c_user").await {
+            if !self.cookie_exists("c_user").await {
                 // login into facebook
                 facebook_login(
                     &self.client,
