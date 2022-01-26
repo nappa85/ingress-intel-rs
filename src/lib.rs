@@ -203,7 +203,8 @@ impl<'a> Intel<'a> {
         lock.get(cookie).is_some()
     }
 
-    async fn login(&self) -> Result<(), ()> {
+    /// performs login, if necessary
+    pub async fn login(&self) -> Result<(), ()> {
         if self.api_version.get().is_some() {
             return Ok(());
         }
