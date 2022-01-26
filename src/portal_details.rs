@@ -34,12 +34,61 @@ impl IntelPortal {
     pub fn get_longitude(&self) -> f64 {
         (self.3 as f64) / 1000000_f64
     }
+
+    /// returns resonators state
+    pub fn get_mods(&self) -> &[Option<IntelMod>] {
+        &self.14
+    }
+
+    /// returns resonators state
+    pub fn get_resonators(&self) -> &[Option<IntelResonator>] {
+        &self.15
+    }
 }
 
 /// portal deployed mod
 #[derive(Debug, Deserialize)]
 pub struct IntelMod(String, String, String, Value);
 
+impl IntelMod {
+    /// returns mod owner
+    pub fn get_owner(&self) -> &str {
+        &self.0
+    }
+
+    /// returns mod name/type
+    pub fn get_name(&self) -> &str {
+        &self.1
+    }
+
+    /// returns mod rarity
+    pub fn get_rarity(&self) -> &str {
+        &self.2
+    }
+
+    /// returns mod stats
+    pub fn get_stats(&self) -> &Value {
+        &self.3
+    }
+}
+
 /// portal deployed resonator
 #[derive(Debug, Deserialize)]
 pub struct IntelResonator(String, u8, u16);
+
+impl IntelResonator {
+    /// returns resonator owner
+    pub fn get_owner(&self) -> &str {
+        &self.0
+    }
+
+    /// returns resonator level
+    pub fn get_level(&self) -> u8 {
+        self.1
+    }
+
+    /// returns resonator energy
+    pub fn get_energy(&self) -> u16 {
+        self.2
+    }
+}
