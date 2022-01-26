@@ -10,13 +10,15 @@ use std::collections::HashMap;
 
 use reqwest::{Client, Method, Request, Response};
 
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 
 use regex::Regex;
 
 use percent_encoding::percent_decode_str;
 
 use serde_json::{json, value::Value};
+
+use tokio::sync::RwLock;
 
 use tracing::error;
 
@@ -41,7 +43,7 @@ static INPUT_ATTRIBUTES: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^\s="]+)="([
 // static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
 static API_VERSION: Lazy<Regex> = Lazy::new(|| Regex::new(r#"/jsc/gen_dashboard_(\w+)\.js"#).unwrap());
 
-async fn call(client: &Client, req: Request, cookie_store: &mut HashMap<String, String>) -> Result<Response, ()> {
+async fn call(client: &Client, req: Request, cookie_store: &RwLock<HashMap<String, String>>) -> Result<Response, ()> {
     let url = req.url().to_string();
     let res = client.execute(req)
         .await
@@ -49,18 +51,20 @@ async fn call(client: &Client, req: Request, cookie_store: &mut HashMap<String, 
         .error_for_status()
         .map_err(|e| error!("unsucessfull response from {}: {}", url, e))?;
 
+    let mut lock = cookie_store.write().await;
     res.cookies().for_each(|c| {
-        cookie_store.insert(c.name().to_owned(), c.value().to_owned());
+        lock.insert(c.name().to_owned(), c.value().to_owned());
     });
 
     Ok(res)
 }
 
-fn get_cookies(cookie_store: &HashMap<String, String>) -> String {
-    cookie_store.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("; ")
+async fn get_cookies(cookie_store: &RwLock<HashMap<String, String>>) -> String {
+    let lock = cookie_store.read().await;
+    lock.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("; ")
 }
 
-async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &mut HashMap<String, String>) -> Result<(), ()> {
+async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &RwLock<HashMap<String, String>>) -> Result<(), ()> {
     let req = client.request(Method::GET, "https://www.facebook.com/?_fb_noscript=1")
         // .header("Referer", "https://www.google.com/")
         .header("User-Agent", USER_AGENT)
@@ -109,7 +113,7 @@ async fn facebook_login(client: &Client, username: &str, password: &str, cookie_
         // .header("Referer", "https://www.facebook.com/")
         // .header("Origin", "https://www.facebook.com/")
         .header("User-Agent", USER_AGENT)
-        .header("Cookie", get_cookies(cookie_store))
+        .header("Cookie", get_cookies(cookie_store).await)
         .form(&fields)
         .build()
         .map_err(|e| error!("error building second facebook request: {}", e))?;
@@ -141,9 +145,9 @@ pub struct Intel<'a> {
     username: Option<&'a str>,
     password: Option<&'a str>,
     client: Cow<'a, Client>,
-    cookie_store: HashMap<String, String>,
-    api_version: Option<String>,
-    csrftoken: Option<String>,
+    cookie_store: RwLock<HashMap<String, String>>,
+    api_version: OnceCell<String>,
+    csrftoken: OnceCell<String>,
 }
 
 impl<'a> Intel<'a> {
@@ -153,9 +157,9 @@ impl<'a> Intel<'a> {
             username,
             password,
             client: Cow::Borrowed(client),
-            cookie_store: HashMap::new(),
-            api_version: None,
-            csrftoken: None,
+            cookie_store: Default::default(),
+            api_version: OnceCell::new(),
+            csrftoken: OnceCell::new(),
         }
     }
 
@@ -165,36 +169,55 @@ impl<'a> Intel<'a> {
             username,
             password,
             client: Cow::Owned(Client::new()),
-            cookie_store: HashMap::new(),
-            api_version: None,
-            csrftoken: None,
+            cookie_store: Default::default(),
+            api_version: OnceCell::new(),
+            csrftoken: OnceCell::new(),
         }
     }
 
     /// adds a cookie to the store
-    pub fn add_cookie<N, V>(&mut self, name: N, value: V)
+    pub async fn add_cookie<N, V>(&self, name: N, value: V)
     where
         N: ToString,
         V: ToString,
     {
-        self.cookie_store.insert(name.to_string(), value.to_string());
+        let mut lock = self.cookie_store.write().await;
+        lock.insert(name.to_string(), value.to_string());
     }
 
-    async fn login(&mut self) -> Result<(), ()> {
-        if self.api_version.is_some() {
+    /// adds multiple cookies to the store
+    pub async fn add_cookies<I, N, V>(&self, iter: I)
+    where
+        I: IntoIterator<Item=(N, V)>,
+        N: ToString,
+        V: ToString,
+    {
+        let mut lock = self.cookie_store.write().await;
+        for (name, value) in iter {
+            lock.insert(name.to_string(), value.to_string());
+        }
+    }
+
+    async fn cookie_exists(&self, cookie: &str) -> bool {
+        let lock = self.cookie_store.read().await;
+        lock.get(cookie).is_some()
+    }
+
+    async fn login(&self) -> Result<(), ()> {
+        if self.api_version.get().is_some() {
             return Ok(());
         }
 
         // permits to add intel cookie without generating it everytime
-        let url = if self.cookie_store.get("csrftoken").is_none() {
+        let url = if self.cookie_exists("csrftoken").await {
             // permits to add facebook cookie without generating it everytime
-            if self.cookie_store.get("c_user").is_none() {
+            if self.cookie_exists("c_user").await {
                 // login into facebook
                 facebook_login(
                     &self.client,
                     self.username.ok_or_else(|| error!("Missing facebok username"))?,
                     self.password.ok_or_else(|| error!("Missing facebook password"))?,
-                    &mut self.cookie_store
+                    &self.cookie_store
                 ).await?;
             }
 
@@ -202,7 +225,7 @@ impl<'a> Intel<'a> {
             let req = self.client.request(Method::GET, "https://intel.ingress.com/")
                 .build()
                 .map_err(|e| error!("error building first intel request: {}", e))?;
-            let intel = call(&self.client, req, &mut self.cookie_store).await?
+            let intel = call(&self.client, req, &self.cookie_store).await?
                 .text()
                 .await
                 .map_err(|e| error!("error encoding first intel response: {}", e))?;
@@ -220,71 +243,73 @@ impl<'a> Intel<'a> {
 
         let req = self.client.request(Method::GET, url)
             .header("User-Agent", USER_AGENT)
-            .header("Cookie", get_cookies(&self.cookie_store))
+            .header("Cookie", get_cookies(&self.cookie_store).await)
             .build()
             .map_err(|e| error!("error building second intel request: {}", e))?;
-        let res = call(&self.client, req, &mut self.cookie_store).await?;
-        self.csrftoken = res.cookies().find(|c| c.name() == "csrftoken").map(|c| c.value().to_string());
+        let res = call(&self.client, req, &self.cookie_store).await?;
+        let csrftoken = res.cookies().find(|c| c.name() == "csrftoken").map(|c| c.value().to_string()).ok_or_else(|| error!("Can't find csrftoken Cookie"))?;
+        self.csrftoken.set(csrftoken).map_err(|_| error!("Can't set csrftoken"))?;
         let intel = res.text()
             .await
             .map_err(|e| error!("error encoding second intel response: {}", e))?;
 
         let captures = API_VERSION.captures(&intel).ok_or_else(|| error!("Can't find Intel API version"))?;
-        self.api_version = Some(captures.get(1).map(|m| m.as_str().to_owned()).ok_or_else(|| error!("Can't read Intel API version"))?);
+        let api_version = captures.get(1).map(|m| m.as_str().to_owned()).ok_or_else(|| error!("Can't read Intel API version"))?;
+        self.api_version.set(api_version).map_err(|_| error!("Can't set api_version"))?;
 
         Ok(())
     }
 
     /// Retrieves entities informations for a given point
-    pub async fn get_entities(&mut self, latitude: f64, longitude: f64) -> Result<entities::IntelResponse, ()> {
+    pub async fn get_entities(&self, latitude: f64, longitude: f64) -> Result<entities::IntelResponse, ()> {
         self.login().await?;
 
         let body = json!({
             "tileKeys": get_tile_keys_around(latitude, longitude),
-            "v": self.api_version.as_ref().ok_or_else(|| error!("missing API version"))?,
+            "v": self.api_version.get().ok_or_else(|| error!("missing API version"))?,
         });
 
         let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getEntities")
             .header("Referer", "https://intel.ingress.com/")
             .header("Origin", "https://intel.ingress.com/")
-            .header("Cookie", get_cookies(&self.cookie_store))
-            .header("X-CSRFToken", self.csrftoken.as_ref().ok_or_else(|| error!("missing CSRFToken"))?)
+            .header("Cookie", get_cookies(&self.cookie_store).await)
+            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| error!("missing CSRFToken"))?)
             .json(&body)
             .build()
             .map_err(|e| error!("error building entities request: {}", e))?;
 
-        call(&self.client, req, &mut self.cookie_store).await?
+        call(&self.client, req, &self.cookie_store).await?
             .json()
             .await
             .map_err(|e| error!("error deserializing entities response: {}", e))
     }
 
     /// Retrieves informations for a given portal
-    pub async fn get_portal_details(&mut self, portal_id: &str) -> Result<portal_details::IntelResponse, ()> {
+    pub async fn get_portal_details(&self, portal_id: &str) -> Result<portal_details::IntelResponse, ()> {
         self.login().await?;
 
         let body = json!({
             "guid": portal_id,
-            "v": self.api_version.as_ref().unwrap(),
+            "v": self.api_version.get().unwrap(),
         });
 
         let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getPortalDetails")
             .header("Referer", "https://intel.ingress.com/")
             .header("Origin", "https://intel.ingress.com/")
-            .header("Cookie", get_cookies(&self.cookie_store))
-            .header("X-CSRFToken", self.csrftoken.as_ref().ok_or_else(|| error!("missing CSRFToken"))?)
+            .header("Cookie", get_cookies(&self.cookie_store).await)
+            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| error!("missing CSRFToken"))?)
             .json(&body)
             .build()
             .map_err(|e| error!("error building portal details request: {}", e))?;
 
-        call(&self.client, req, &mut self.cookie_store).await?
+        call(&self.client, req, &self.cookie_store).await?
             .json()
             .await
             .map_err(|e| error!("error deserializing portal details response: {}", e))
     }
 
     /// Retrieves COMM contents
-    pub async fn get_plexts(&mut self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab, min_timestamp_ms: Option<i64>, max_timestamp_ms: Option<i64>) -> Result<plexts::IntelResponse, ()> {
+    pub async fn get_plexts(&self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab, min_timestamp_ms: Option<i64>, max_timestamp_ms: Option<i64>) -> Result<plexts::IntelResponse, ()> {
         self.login().await?;
 
         let body = json!({
@@ -295,19 +320,19 @@ impl<'a> Intel<'a> {
             "minTimestampMs": min_timestamp_ms.unwrap_or(-1),
             "maxTimestampMs": max_timestamp_ms.unwrap_or(-1),
             "tab": tab,
-            "v": self.api_version.as_ref().unwrap(),
+            "v": self.api_version.get().unwrap(),
         });
 
         let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getPlexts")
             .header("Referer", "https://intel.ingress.com/")
             .header("Origin", "https://intel.ingress.com/")
-            .header("Cookie", get_cookies(&self.cookie_store))
-            .header("X-CSRFToken", self.csrftoken.as_ref().ok_or_else(|| error!("missing CSRFToken"))?)
+            .header("Cookie", get_cookies(&self.cookie_store).await)
+            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| error!("missing CSRFToken"))?)
             .json(&body)
             .build()
             .map_err(|e| error!("error building portal details request: {}", e))?;
 
-        call(&self.client, req, &mut self.cookie_store).await?
+        call(&self.client, req, &self.cookie_store).await?
             .json()
             .await
             .map_err(|e| error!("error deserializing portal details response: {}", e))
@@ -336,14 +361,13 @@ mod tests {
     async fn login() -> Result<(), ()> {
         tracing_subscriber::fmt::try_init().ok();
 
-        let mut intel = Intel::build(USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
+        let intel = Intel::build(USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));
 
         if let Some(cookies) = &*COOKIES {
-            for cookie in cookies.split("; ") {
-                if let Some((pos, _)) = cookie.match_indices('=').next() {
-                    intel.add_cookie(&cookie[0..pos], &cookie[(pos + 1)..]);
-                }
-            }
+            intel.add_cookies(cookies.split("; ").filter_map(|cookie| {
+                let (pos, _) = cookie.match_indices('=').next()?;
+                Some((&cookie[0..pos], &cookie[(pos + 1)..]))
+            })).await;
         }
 
         if let (Some(latitude), Some(longitude)) = (*LATITUDE, *LONGITUDE) {
