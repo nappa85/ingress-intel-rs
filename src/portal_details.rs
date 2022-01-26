@@ -4,14 +4,14 @@ use serde::Deserialize;
 use serde_json::value::Value;
 
 /// endpoint reponse root
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct IntelResponse {
     /// "result" node
     pub result: IntelPortal,
 }
 
 /// endpoint main entity
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct IntelPortal(String, String, i64, i64, u8, f64, u8, String, String, Vec<Value>, bool, bool, Value, i64, Vec<Option<IntelMod>>, Vec<Option<IntelResonator>>, String, Vec<Value>);
 
 impl IntelPortal {
@@ -47,7 +47,7 @@ impl IntelPortal {
 }
 
 /// portal deployed mod
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct IntelMod(String, String, String, Value);
 
 impl IntelMod {
@@ -73,7 +73,7 @@ impl IntelMod {
 }
 
 /// portal deployed resonator
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct IntelResonator(String, u8, u16);
 
 impl IntelResonator {
