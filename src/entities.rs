@@ -4,6 +4,8 @@ use serde::Deserialize;
 
 use serde_json::value::Value;
 
+use tracing::warn;
+
 /// endpoint reponse root
 #[derive(Debug, Deserialize)]
 pub struct IntelResponse {
@@ -55,31 +57,40 @@ impl IntelEntity {
 
     /// returns name if entity is a portal
     pub fn get_name(&self) -> Option<&str> {
-        if self.2[0].as_str() == Some("p") {
-            self.2[8].as_str()
+        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+            if let Some(v) = self.2.get(8) {
+                return v.as_str();
+            }
+            else {
+                warn!("Portal without name: {:?}", self);
+            }
         }
-        else {
-            None
-        }
+        None
     }
 
     /// returns latitude if entity is a portal
     pub fn get_latitude(&self) -> Option<f64> {
-        if self.2[0].as_str() == Some("p") {
-            self.2[2].as_f64().map(|n| n / 1000000_f64)
+        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+            if let Some(v) = self.2.get(2) {
+                return Some(v.as_f64()? / 1000000_f64);
+            }
+            else {
+                warn!("Portal without latitude: {:?}", self);
+            }
         }
-        else {
-            None
-        }
+        None
     }
 
     /// returns longitude if entity is a portal
     pub fn get_longitude(&self) -> Option<f64> {
-        if self.2[0].as_str() == Some("p") {
-            self.2[3].as_f64().map(|n| n / 1000000_f64)
+        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+            if let Some(v) = self.2.get(3) {
+                return Some(v.as_f64()? / 1000000_f64);
+            }
+            else {
+                warn!("Portal without longitude: {:?}", self);
+            }
         }
-        else {
-            None
-        }
+        None
     }
 }
