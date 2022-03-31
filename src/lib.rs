@@ -5,6 +5,7 @@
 //!
 //! Ingress Intel API interface in pure Rust
 
+use std::fmt;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -43,13 +44,68 @@ static INPUT_ATTRIBUTES: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^\s="]+)="([
 // static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
 static API_VERSION: Lazy<Regex> = Lazy::new(|| Regex::new(r#"/jsc/gen_dashboard_(\w+)\.js"#).unwrap());
 
-async fn call(client: &Client, req: Request, cookie_store: &RwLock<HashMap<String, String>>) -> Result<Response, ()> {
+/// Error types
+#[derive(Debug)]
+pub enum Error {
+    /// Transport error
+    Transport,
+    /// Status error
+    Status,
+    /// MissingFacebookUsername error
+    MissingFacebookUsername,
+    /// MissingFacebookPassword error
+    MissingFacebookPassword,
+    /// FacebookUrl error
+    FacebookUrl,
+    /// FirstFacebookRequest error
+    FirstFacebookRequest,
+    /// FirstFacebookResponse error
+    FirstFacebookResponse,
+    /// SecondFacebookRequest error
+    SecondFacebookRequest,
+    /// LoginForm error
+    LoginForm,
+    /// LoginFailed error
+    LoginFailed,
+    /// FirstIntelRequest error
+    FirstIntelRequest,
+    /// SecondIntelRequest error
+    SecondIntelRequest,
+    /// CsrfToken error
+    CsrfToken,
+    /// IntelApiVersion error
+    IntelApiVersion,
+    /// EntityRequest error
+    EntityRequest,
+    /// PortalDetailsRequest error
+    PortalDetailsRequest,
+    /// PlextsRequest error
+    PlextsRequest,
+    /// Deserialize error
+    Deserialize,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for Error {}
+
+async fn call(client: &Client, req: Request, cookie_store: &RwLock<HashMap<String, String>>) -> Result<Response, Error> {
     let url = req.url().to_string();
     let res = client.execute(req)
         .await
-        .map_err(|e| error!("error receiving response from {}: {}", url, e))?
+        .map_err(|e| {
+            error!("error receiving response from {}: {}", url, e);
+            Error::Transport
+        })?
         .error_for_status()
-        .map_err(|e| error!("unsucessfull response from {}: {}", url, e))?;
+        .map_err(|e| {
+            error!("unsucessfull response from {}: {}", url, e);
+            Error::Status
+        })?;
 
     let mut lock = cookie_store.write().await;
     res.cookies().for_each(|c| {
@@ -64,25 +120,40 @@ async fn get_cookies(cookie_store: &RwLock<HashMap<String, String>>) -> String {
     lock.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<String>>().join("; ")
 }
 
-async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &RwLock<HashMap<String, String>>) -> Result<(), ()> {
+async fn facebook_login(client: &Client, username: &str, password: &str, cookie_store: &RwLock<HashMap<String, String>>) -> Result<(), Error> {
     let req = client.request(Method::GET, "https://www.facebook.com/?_fb_noscript=1")
         // .header("Referer", "https://www.google.com/")
         .header("User-Agent", USER_AGENT)
         .build()
-        .map_err(|e| error!("error building first facebook request: {}", e))?;
+        .map_err(|e| {
+            error!("error building first facebook request: {}", e);
+            Error::FirstFacebookRequest
+        })?;
 
     let body = call(client, req, cookie_store).await?
         .text().await
-        .map_err(|e| error!("error encoding response text: {}", e))?;
+        .map_err(|e| {
+            error!("error encoding response text: {}", e);
+            Error::FirstFacebookResponse
+        })?;
 
-    let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| error!("Facebook login form not found"))?;
+    let captures = FACEBOOK_LOGIN_FORM.captures(&body).ok_or_else(|| {
+        error!("Facebook login form not found");
+        Error::LoginForm
+    })?;
     let url = format!(
         "https://www.facebook.com{}",
         captures.get(1)
             .and_then(|m| percent_decode_str(&m.as_str().replace("&amp;", "&")).decode_utf8().ok().map(|s| s.to_string()))
-            .ok_or_else(|| error!("Facebook login form URL not found\nbody: {}", body))?
+            .ok_or_else(|| {
+                error!("Facebook login form URL not found\nbody: {}", body);
+                Error::LoginForm
+            })?
     );
-    let form = captures.get(2).map(|m| m.as_str()).ok_or_else(|| error!("Facebook login form contents not found"))?;
+    let form = captures.get(2).map(|m| m.as_str()).ok_or_else(|| {
+        error!("Facebook login form contents not found");
+        Error::LoginForm
+    })?;
 
     let mut fields = Value::Null;
     for m in INPUT_FIELDS.captures_iter(form) {
@@ -116,10 +187,16 @@ async fn facebook_login(client: &Client, username: &str, password: &str, cookie_
         .header("Cookie", get_cookies(cookie_store).await)
         .form(&fields)
         .build()
-        .map_err(|e| error!("error building second facebook request: {}", e))?;
+        .map_err(|e| {
+            error!("error building second facebook request: {}", e);
+            Error::SecondFacebookRequest
+        })?;
 
     let res = call(client, req, cookie_store).await?;
-    res.cookies().find(|c| c.name() == "c_user").ok_or_else(|| error!("Facebook login failed"))?;
+    res.cookies().find(|c| c.name() == "c_user").ok_or_else(|| {
+        error!("Facebook login failed");
+        Error::LoginFailed
+    })?;
 
     Ok(())
 }
@@ -204,7 +281,7 @@ impl<'a> Intel<'a> {
     }
 
     /// performs login, if necessary
-    pub async fn login(&self) -> Result<(), ()> {
+    pub async fn login(&self) -> Result<(), Error> {
         if self.api_version.get().is_some() {
             return Ok(());
         }
@@ -216,8 +293,14 @@ impl<'a> Intel<'a> {
                 // login into facebook
                 facebook_login(
                     &self.client,
-                    self.username.ok_or_else(|| error!("Missing facebok username"))?,
-                    self.password.ok_or_else(|| error!("Missing facebook password"))?,
+                    self.username.ok_or_else(|| {
+                        error!("Missing facebok username");
+                        Error::MissingFacebookUsername
+                    })?,
+                    self.password.ok_or_else(|| {
+                        error!("Missing facebook password");
+                        Error::MissingFacebookPassword
+                    })?,
                     &self.cookie_store
                 ).await?;
             }
@@ -225,17 +308,26 @@ impl<'a> Intel<'a> {
             // retrieve facebook login url
             let req = self.client.request(Method::GET, "https://intel.ingress.com/")
                 .build()
-                .map_err(|e| error!("error building first intel request: {}", e))?;
+                .map_err(|e| {
+                    error!("error building first intel request: {}", e);
+                    Error::FirstIntelRequest
+                })?;
             let intel = call(&self.client, req, &self.cookie_store).await?
                 .text()
                 .await
-                .map_err(|e| error!("error encoding first intel response: {}", e))?;
+                .map_err(|e| {
+                    error!("error encoding first intel response: {}", e);
+                    Error::FirstIntelRequest
+                })?;
             INTEL_URLS.captures_iter(&intel)
                 .map(|m| m.get(1).map(|s| s.as_str()))
                 .filter(Option::is_some)
                 .map(Option::unwrap)
                 .find(|s| s.starts_with("https://www.facebook.com/"))
-                .ok_or_else(|| error!("Can't retrieve Intel's Facebook login URL"))?
+                .ok_or_else(|| {
+                    error!("Can't retrieve Intel's Facebook login URL");
+                    Error::FacebookUrl
+                })?
                 .to_owned()
         }
         else {
@@ -246,47 +338,80 @@ impl<'a> Intel<'a> {
             .header("User-Agent", USER_AGENT)
             .header("Cookie", get_cookies(&self.cookie_store).await)
             .build()
-            .map_err(|e| error!("error building second intel request: {}", e))?;
+            .map_err(|e| {
+                error!("error building second intel request: {}", e);
+                Error::SecondIntelRequest
+            })?;
         let res = call(&self.client, req, &self.cookie_store).await?;
-        let csrftoken = res.cookies().find(|c| c.name() == "csrftoken").map(|c| c.value().to_string()).ok_or_else(|| error!("Can't find csrftoken Cookie"))?;
-        self.csrftoken.set(csrftoken).map_err(|_| error!("Can't set csrftoken"))?;
+        let csrftoken = res.cookies().find(|c| c.name() == "csrftoken").map(|c| c.value().to_string()).ok_or_else(|| {
+            error!("Can't find csrftoken Cookie");
+            Error::CsrfToken
+        })?;
+        self.csrftoken.set(csrftoken).map_err(|_| {
+            error!("Can't set csrftoken");
+            Error::CsrfToken
+        })?;
         let intel = res.text()
             .await
-            .map_err(|e| error!("error encoding second intel response: {}", e))?;
+            .map_err(|e| {
+                error!("error encoding second intel response: {}", e);
+                Error::SecondIntelRequest
+            })?;
 
-        let captures = API_VERSION.captures(&intel).ok_or_else(|| error!("Can't find Intel API version"))?;
-        let api_version = captures.get(1).map(|m| m.as_str().to_owned()).ok_or_else(|| error!("Can't read Intel API version"))?;
-        self.api_version.set(api_version).map_err(|_| error!("Can't set api_version"))?;
+        let captures = API_VERSION.captures(&intel).ok_or_else(|| {
+            error!("Can't find Intel API version");
+            Error::IntelApiVersion
+        })?;
+        let api_version = captures.get(1).map(|m| m.as_str().to_owned()).ok_or_else(|| {
+            error!("Can't read Intel API version");
+            Error::IntelApiVersion
+        })?;
+        self.api_version.set(api_version).map_err(|_| {
+            error!("Can't set api_version");
+            Error::IntelApiVersion
+        })?;
 
         Ok(())
     }
 
     /// Retrieves entities informations for a given point
-    pub async fn get_entities(&self, latitude: f64, longitude: f64) -> Result<entities::IntelResponse, ()> {
+    pub async fn get_entities(&self, latitude: f64, longitude: f64) -> Result<entities::IntelResponse, Error> {
         self.login().await?;
 
         let body = json!({
             "tileKeys": get_tile_keys_around(latitude, longitude),
-            "v": self.api_version.get().ok_or_else(|| error!("missing API version"))?,
+            "v": self.api_version.get().ok_or_else(|| {
+                error!("missing API version");
+                Error::IntelApiVersion
+            })?,
         });
 
         let req = self.client.request(Method::POST, "https://intel.ingress.com/r/getEntities")
             .header("Referer", "https://intel.ingress.com/")
             .header("Origin", "https://intel.ingress.com/")
             .header("Cookie", get_cookies(&self.cookie_store).await)
-            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| error!("missing CSRFToken"))?)
+            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| {
+                error!("missing CSRFToken");
+                Error::CsrfToken
+            })?)
             .json(&body)
             .build()
-            .map_err(|e| error!("error building entities request: {}", e))?;
+            .map_err(|e| {
+                error!("error building entities request: {}", e);
+                Error::EntityRequest
+            })?;
 
         call(&self.client, req, &self.cookie_store).await?
             .json()
             .await
-            .map_err(|e| error!("error deserializing entities response: {}", e))
+            .map_err(|e| {
+                error!("error deserializing entities response: {}", e);
+                Error::Deserialize
+            })
     }
 
     /// Retrieves informations for a given portal
-    pub async fn get_portal_details(&self, portal_id: &str) -> Result<portal_details::IntelResponse, ()> {
+    pub async fn get_portal_details(&self, portal_id: &str) -> Result<portal_details::IntelResponse, Error> {
         self.login().await?;
 
         let body = json!({
@@ -298,19 +423,28 @@ impl<'a> Intel<'a> {
             .header("Referer", "https://intel.ingress.com/")
             .header("Origin", "https://intel.ingress.com/")
             .header("Cookie", get_cookies(&self.cookie_store).await)
-            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| error!("missing CSRFToken"))?)
+            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| {
+                error!("missing CSRFToken");
+                Error::CsrfToken
+            })?)
             .json(&body)
             .build()
-            .map_err(|e| error!("error building portal details request: {}", e))?;
+            .map_err(|e| {
+                error!("error building portal details request: {}", e);
+                Error::PortalDetailsRequest
+            })?;
 
         call(&self.client, req, &self.cookie_store).await?
             .json()
             .await
-            .map_err(|e| error!("error deserializing portal details response: {}", e))
+            .map_err(|e| {
+                error!("error deserializing portal details response: {}", e);
+                Error::Deserialize
+            })
     }
 
     /// Retrieves COMM contents
-    pub async fn get_plexts(&self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab, min_timestamp_ms: Option<i64>, max_timestamp_ms: Option<i64>) -> Result<plexts::IntelResponse, ()> {
+    pub async fn get_plexts(&self, from: [u64; 2], to: [u64; 2], tab: plexts::Tab, min_timestamp_ms: Option<i64>, max_timestamp_ms: Option<i64>) -> Result<plexts::IntelResponse, Error> {
         self.login().await?;
 
         let body = json!({
@@ -328,22 +462,31 @@ impl<'a> Intel<'a> {
             .header("Referer", "https://intel.ingress.com/")
             .header("Origin", "https://intel.ingress.com/")
             .header("Cookie", get_cookies(&self.cookie_store).await)
-            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| error!("missing CSRFToken"))?)
+            .header("X-CSRFToken", self.csrftoken.get().ok_or_else(|| {
+                error!("missing CSRFToken");
+                Error::CsrfToken
+            })?)
             .json(&body)
             .build()
-            .map_err(|e| error!("error building portal details request: {}", e))?;
+            .map_err(|e| {
+                error!("error building portal details request: {}", e);
+                Error::PlextsRequest
+            })?;
 
         call(&self.client, req, &self.cookie_store).await?
             .json()
             .await
-            .map_err(|e| error!("error deserializing portal details response: {}", e))
+            .map_err(|e| {
+                error!("error deserializing portal details response: {}", e);
+                Error::Deserialize
+            })
     }
 }
 
 
 #[cfg(test)]
 mod tests {
-    use super::Intel;
+    use super::{Error, Intel};
 
     use std::env;
 
@@ -359,7 +502,7 @@ mod tests {
     static PORTAL_ID: Lazy<Option<String>> = Lazy::new(|| env::var("PORTAL_ID").ok());
 
     #[tokio::test]
-    async fn login() -> Result<(), ()> {
+    async fn login() -> Result<(), Error> {
         tracing_subscriber::fmt::try_init().ok();
 
         let intel = Intel::build(USERNAME.as_ref().map(|s| s.as_str()), PASSWORD.as_ref().map(|s| s.as_str()));

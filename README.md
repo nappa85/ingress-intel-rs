@@ -9,10 +9,10 @@ Only Facebook login is supported, there are no plans for Google login support
 ```rust
 use reqwest::Client;
 
-use ingress_intel_rs::Intel;
+use ingress_intel_rs::{Error, Intel};
 
 #[tokio::main]
-async fn main() -> Result<(), ()> {
+async fn main() -> Result<(), Error> {
     let client = Client::new();
 
     let mut intel = Intel::new(client, Some("your@facebook.email"), Some("your_facebook_password"));
@@ -30,10 +30,10 @@ Facebook often blocks suspect login attempts, a workaround can be to pass direct
 ```rust
 use reqwest::Client;
 
-use ingress_intel_rs::Intel;
+use ingress_intel_rs::{Error, Intel};
 
 #[tokio::main]
-async fn main() -> Result<(), ()> {
+async fn main() -> Result<(), Error> {
     let client = Client::new();
 
     let mut intel = Intel::new(client, None, None);
@@ -58,19 +58,16 @@ Facebook login can fail at any time because they change something on their side,
 ```rust
 use reqwest::Client;
 
-use ingress_intel_rs::Intel;
+use ingress_intel_rs::{Error, Intel};
 
 #[tokio::main]
-async fn main() -> Result<(), ()> {
+async fn main() -> Result<(), Error> {
     let client = Client::new();
 
     let mut intel = Intel::new(client, None, None);
     // add intel cookies
     intel.add_cookie("csrftoken", "csrftoken_cookie_value");
     intel.add_cookie("_ga", "_ga_cookie_value");
-    intel.add_cookie("ingress.intelmap.lat", "ingress.intelmap.lat_cookie_value");
-    intel.add_cookie("ingress.intelmap.lng", "ingress.intelmap.lng_cookie_value");
-    intel.add_cookie("ingress.intelmap.zoom", "ingress.intelmap.zoom_cookie_value");
     intel.add_cookie("sessionid", "sessionid_cookie_value");
     intel.add_cookie("_gid", "_gid_cookie_value");
     println!("get_portal_details {:?}", intel.get_portal_details("your_portal_id").await?);
