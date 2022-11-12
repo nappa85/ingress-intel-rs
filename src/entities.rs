@@ -22,7 +22,7 @@ pub struct IntelMap {
 
 /// endpoint response "map" contents
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]  
+#[serde(untagged)]
 pub enum IntelResult {
     /// error entity
     Error(IntelError),
@@ -42,7 +42,7 @@ pub struct IntelError {
 pub struct IntelEntities {
     /// "gameEntities" node
     #[serde(rename = "gameEntities")]
-    pub entities: Vec<IntelEntity>
+    pub entities: Vec<IntelEntity>,
 }
 
 /// endpoint main entity
@@ -60,8 +60,7 @@ impl IntelEntity {
         if self.2.get(0).and_then(Value::as_str) == Some("p") {
             if let Some(v) = self.2.get(8) {
                 return v.as_str();
-            }
-            else {
+            } else {
                 warn!("Portal without name: {:?}", self);
             }
         }
@@ -73,8 +72,7 @@ impl IntelEntity {
         if self.2.get(0).and_then(Value::as_str) == Some("p") {
             if let Some(v) = self.2.get(2) {
                 return Some(v.as_f64()? / 1000000_f64);
-            }
-            else {
+            } else {
                 warn!("Portal without latitude: {:?}", self);
             }
         }
@@ -86,8 +84,7 @@ impl IntelEntity {
         if self.2.get(0).and_then(Value::as_str) == Some("p") {
             if let Some(v) = self.2.get(3) {
                 return Some(v.as_f64()? / 1000000_f64);
-            }
-            else {
+            } else {
                 warn!("Portal without longitude: {:?}", self);
             }
         }

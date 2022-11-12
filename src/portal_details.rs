@@ -1,4 +1,3 @@
-
 use serde::Deserialize;
 
 use serde_json::value::Value;
@@ -12,7 +11,26 @@ pub struct IntelResponse {
 
 /// endpoint main entity
 #[derive(Clone, Debug, Deserialize)]
-pub struct IntelPortal(String, String, i64, i64, u8, f64, u8, String, String, Vec<Value>, bool, bool, Value, i64, Vec<Option<IntelMod>>, Vec<Option<IntelResonator>>, String, Vec<Value>);
+pub struct IntelPortal(
+    String,
+    String,
+    i64,
+    i64,
+    u8,
+    f64,
+    u8,
+    String,
+    String,
+    Vec<Value>,
+    bool,
+    bool,
+    Value,
+    i64,
+    Vec<Option<IntelMod>>,
+    Vec<Option<IntelResonator>>,
+    String,
+    Vec<Value>,
+);
 
 impl IntelPortal {
     /// returns portal name
