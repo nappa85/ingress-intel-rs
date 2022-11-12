@@ -109,7 +109,7 @@ impl IntelEntity {
                         Some("E") => Some(Faction::Enlightened),
                         Some("R") => Some(Faction::Resistance),
                         _ => {
-                            warn!("Unknown faction {v:?}");
+                            warn!("Unknown faction {:?}", self);
                             None
                         }
                     }
@@ -124,7 +124,7 @@ impl IntelEntity {
                         Some("E") => Some(Faction::Enlightened),
                         Some("R") => Some(Faction::Resistance),
                         _ => {
-                            warn!("Unknown faction {v:?}");
+                            warn!("Unknown faction {:?}", self);
                             None
                         }
                     }
