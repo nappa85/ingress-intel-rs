@@ -55,9 +55,14 @@ impl IntelEntity {
         &self.0
     }
 
+    /// returns entity id
+    pub fn is_portal(&self) -> bool {
+        self.2.get(0).and_then(Value::as_str) == Some("p")
+    }
+
     /// returns name if entity is a portal
     pub fn get_name(&self) -> Option<&str> {
-        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+        if self.is_portal() {
             if let Some(v) = self.2.get(8) {
                 return v.as_str();
             } else {
@@ -69,43 +74,29 @@ impl IntelEntity {
 
     /// returns latitude if entity is a portal
     pub fn get_latitude(&self) -> Option<f64> {
-        match self.2.get(0).and_then(Value::as_str) {
-            Some("p") => {
-                if let Some(v) = self.2.get(2) {
-                    Some(v.as_f64()? / 1000000_f64)
-                } else {
-                    warn!("Portal without latitude: {:?}", self);
-                    None
-                }
+        if self.is_portal() {
+            if let Some(v) = self.2.get(2) {
+                Some(v.as_f64()? / 1000000_f64)
+            } else {
+                warn!("Portal without latitude: {:?}", self);
+                None
             }
-            // Some("e") => if let Some(v) = self.2.get(3) {
-            //     Some(v.as_f64()? / 1000000_f64)
-            // } else {
-            //     warn!("Entity without latitude: {:?}", self);
-            //     None
-            // },
-            _ => None,
+        } else {
+            None
         }
     }
 
     /// returns longitude if entity is a portal
     pub fn get_longitude(&self) -> Option<f64> {
-        match self.2.get(0).and_then(Value::as_str) {
-            Some("p") => {
-                if let Some(v) = self.2.get(3) {
-                    Some(v.as_f64()? / 1000000_f64)
-                } else {
-                    warn!("Portal without longitude: {:?}", self);
-                    None
-                }
+        if self.is_portal() {
+            if let Some(v) = self.2.get(3) {
+                Some(v.as_f64()? / 1000000_f64)
+            } else {
+                warn!("Portal without longitude: {:?}", self);
+                None
             }
-            // Some("e") => if let Some(v) = self.2.get(4) {
-            //     Some(v.as_f64()? / 1000000_f64)
-            // } else {
-            //     warn!("Entity without longitude: {:?}", self);
-            //     None
-            // },
-            _ => None,
+        } else {
+            None
         }
     }
 
@@ -148,7 +139,7 @@ impl IntelEntity {
 
     /// returns level if entity is a portal
     pub fn get_level(&self) -> Option<u8> {
-        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+        if self.is_portal() {
             if let Some(v) = self.2.get(4) {
                 return Some(v.as_u64()? as u8);
             } else {
