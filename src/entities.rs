@@ -51,8 +51,19 @@ pub struct IntelEntity(String, i64, Vec<Value>);
 
 impl IntelEntity {
     /// returns entity id
-    pub fn get_id(&self) -> &str {
-        &self.0
+    pub fn get_id(&self) -> Option<&str> {
+        match self.2.get(0).and_then(Value::as_str) {
+            Some("p") => Some(&self.0),
+            Some("e") => {
+                if let Some(v) = self.2.get(1) {
+                    v.as_str()
+                } else {
+                    warn!("Entity without id: {:?}", self);
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// returns name if entity is a portal
@@ -69,42 +80,81 @@ impl IntelEntity {
 
     /// returns latitude if entity is a portal
     pub fn get_latitude(&self) -> Option<f64> {
-        if self.2.get(0).and_then(Value::as_str) == Some("p") {
-            if let Some(v) = self.2.get(2) {
-                return Some(v.as_f64()? / 1000000_f64);
-            } else {
-                warn!("Portal without latitude: {:?}", self);
+        match self.2.get(0).and_then(Value::as_str) {
+            Some("p") => {
+                if let Some(v) = self.2.get(2) {
+                    Some(v.as_f64()? / 1000000_f64)
+                } else {
+                    warn!("Portal without latitude: {:?}", self);
+                    None
+                }
             }
+            // Some("e") => if let Some(v) = self.2.get(3) {
+            //     Some(v.as_f64()? / 1000000_f64)
+            // } else {
+            //     warn!("Entity without latitude: {:?}", self);
+            //     None
+            // },
+            _ => None,
         }
-        None
     }
 
     /// returns longitude if entity is a portal
     pub fn get_longitude(&self) -> Option<f64> {
-        if self.2.get(0).and_then(Value::as_str) == Some("p") {
-            if let Some(v) = self.2.get(3) {
-                return Some(v.as_f64()? / 1000000_f64);
-            } else {
-                warn!("Portal without longitude: {:?}", self);
+        match self.2.get(0).and_then(Value::as_str) {
+            Some("p") => {
+                if let Some(v) = self.2.get(3) {
+                    Some(v.as_f64()? / 1000000_f64)
+                } else {
+                    warn!("Portal without longitude: {:?}", self);
+                    None
+                }
             }
+            // Some("e") => if let Some(v) = self.2.get(4) {
+            //     Some(v.as_f64()? / 1000000_f64)
+            // } else {
+            //     warn!("Entity without longitude: {:?}", self);
+            //     None
+            // },
+            _ => None,
         }
-        None
     }
 
     /// returns faction if entity is a portal
     pub fn get_faction(&self) -> Option<Faction> {
-        if self.2.get(0).and_then(Value::as_str) == Some("p") {
-            if let Some(v) = self.2.get(2) {
-                match v.as_str() {
-                    Some("E") => return Some(Faction::Enlightened),
-                    Some("R") => return Some(Faction::Resistance),
-                    _ => warn!("Unknown faction {v:?}"),
+        match self.2.get(0).and_then(Value::as_str) {
+            Some("p") => {
+                if let Some(v) = self.2.get(2) {
+                    match v.as_str() {
+                        Some("E") => Some(Faction::Enlightened),
+                        Some("R") => Some(Faction::Resistance),
+                        _ => {
+                            warn!("Unknown faction {v:?}");
+                            None
+                        }
+                    }
+                } else {
+                    warn!("Portal without faction: {:?}", self);
+                    None
                 }
-            } else {
-                warn!("Portal without faction: {:?}", self);
             }
+            Some("e") => {
+                if let Some(v) = self.2.get(2) {
+                    match v.as_str() {
+                        Some("E") => Some(Faction::Enlightened),
+                        Some("R") => Some(Faction::Resistance),
+                        _ => {
+                            warn!("Unknown faction {v:?}");
+                            None
+                        }
+                    }
+                } else {
+                    warn!("Entity without faction: {:?}", self);
+                    None
+                }
+            }
+            _ => None,
         }
-        None
     }
 
     /// returns level if entity is a portal
