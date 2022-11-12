@@ -51,19 +51,8 @@ pub struct IntelEntity(String, i64, Vec<Value>);
 
 impl IntelEntity {
     /// returns entity id
-    pub fn get_id(&self) -> Option<&str> {
-        match self.2.get(0).and_then(Value::as_str) {
-            Some("p") => Some(&self.0),
-            Some("e") => {
-                if let Some(v) = self.2.get(1) {
-                    v.as_str()
-                } else {
-                    warn!("Entity without id: {:?}", self);
-                    None
-                }
-            }
-            _ => None,
-        }
+    pub fn get_id(&self) -> &str {
+        &self.0
     }
 
     /// returns name if entity is a portal
