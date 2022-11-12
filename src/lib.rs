@@ -498,7 +498,6 @@ impl<'a> Intel<'a> {
         let mut tile_keys = get_tile_keys_in_range(from, to, zoom, min_level, max_level, health);
         let mut out = Vec::new();
         while !tile_keys.is_empty() {
-            tracing::info!("{tile_keys:?} ({})", tile_keys.len());
             let mut new = tile_keys.split_off(25.min(tile_keys.len()));
             std::mem::swap(&mut new, &mut tile_keys);
             let body = json!({
