@@ -90,4 +90,40 @@ impl IntelEntity {
         }
         None
     }
+
+    /// returns longitude if entity is a portal
+    pub fn get_faction(&self) -> Option<Faction> {
+        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+            if let Some(v) = self.2.get(2) {
+                match v.as_str() {
+                    Some("E") => return Some(Faction::Enlightened),
+                    Some("R") => return Some(Faction::Resistance),
+                    _ => warn!("Unknown faction {v:?}"),
+                }
+            } else {
+                warn!("Portal without faction: {:?}", self);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+/// Factions
+pub enum Faction {
+    /// Enlightened
+    Enlightened,
+    /// Resistance
+    Resistance,
+}
+
+impl Faction {
+    /// checks if enlightened
+    pub fn is_enlightened(&self) -> bool {
+        matches!(self, Faction::Enlightened)
+    }
+    /// checks if resistance
+    pub fn is_resistance(&self) -> bool {
+        matches!(self, Faction::Resistance)
+    }
 }
