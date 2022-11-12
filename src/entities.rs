@@ -120,7 +120,7 @@ impl IntelEntity {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 /// Factions
 pub enum Faction {
     /// Enlightened
