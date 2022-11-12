@@ -91,7 +91,7 @@ impl IntelEntity {
         None
     }
 
-    /// returns longitude if entity is a portal
+    /// returns faction if entity is a portal
     pub fn get_faction(&self) -> Option<Faction> {
         if self.2.get(0).and_then(Value::as_str) == Some("p") {
             if let Some(v) = self.2.get(2) {
@@ -102,6 +102,18 @@ impl IntelEntity {
                 }
             } else {
                 warn!("Portal without faction: {:?}", self);
+            }
+        }
+        None
+    }
+
+    /// returns level if entity is a portal
+    pub fn get_level(&self) -> Option<u8> {
+        if self.2.get(0).and_then(Value::as_str) == Some("p") {
+            if let Some(v) = self.2.get(4) {
+                return Some(v.as_u64()? as u8);
+            } else {
+                warn!("Portal without level: {:?}", self);
             }
         }
         None
