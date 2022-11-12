@@ -104,7 +104,7 @@ impl IntelEntity {
     pub fn get_faction(&self) -> Option<Faction> {
         match self.2.get(0).and_then(Value::as_str) {
             Some("p") => {
-                if let Some(v) = self.2.get(2) {
+                if let Some(v) = self.2.get(1) {
                     match v.as_str() {
                         Some("E") => Some(Faction::Enlightened),
                         Some("R") => Some(Faction::Resistance),
@@ -119,7 +119,7 @@ impl IntelEntity {
                 }
             }
             Some("e") => {
-                if let Some(v) = self.2.get(2) {
+                if let Some(v) = self.2.get(1) {
                     match v.as_str() {
                         Some("E") => Some(Faction::Enlightened),
                         Some("R") => Some(Faction::Resistance),
