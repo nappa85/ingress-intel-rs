@@ -1,6 +1,9 @@
 use serde::Deserialize;
 
 use serde_json::value::Value;
+use tracing::warn;
+
+use crate::entities::Faction;
 
 /// endpoint reponse root
 #[derive(Clone, Debug, Deserialize)]
@@ -51,6 +54,23 @@ impl IntelPortal {
     /// returns portal longitude
     pub fn get_longitude(&self) -> f64 {
         (self.3 as f64) / 1000000_f64
+    }
+
+    /// returns portal level
+    pub fn get_level(&self) -> u8 {
+        self.4
+    }
+
+    /// returns portal level
+    pub fn get_faction(&self) -> Option<Faction> {
+        match self.1.as_str() {
+            "E" => Some(Faction::Enlightened),
+            "R" => Some(Faction::Resistance),
+            _ => {
+                warn!("Unknown faction {}", self.1);
+                None
+            }
+        }
     }
 
     /// returns resonators state
