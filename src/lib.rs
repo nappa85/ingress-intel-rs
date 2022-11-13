@@ -501,21 +501,24 @@ impl<'a> Intel<'a> {
             tracing::debug!("{} tile keys in queue", tile_keys.len());
             let mut new = tile_keys.split_off(25.min(tile_keys.len()));
             std::mem::swap(&mut new, &mut tile_keys);
-            let body = json!({
-                "tileKeys": new,
-                "v": api_version,
-            });
-            let res = get_tiles(body).await;
-            if let Ok(contents) = res {
-                contents.result.map.iter().for_each(|(key, value)| {
-                    if matches!(value, entities::IntelResult::Error(_)) {
-                        tile_keys.push(key.clone());
-                    }
+            loop {
+                let body = json!({
+                    "tileKeys": new,
+                    "v": api_version,
                 });
-                out.push(contents);
-            } else {
-                sleep(Duration::from_secs(1)).await;
-                continue;
+                let res = get_tiles(body).await;
+                if let Ok(contents) = res {
+                    contents.result.map.iter().for_each(|(key, value)| {
+                        if matches!(value, entities::IntelResult::Error(_)) {
+                            tile_keys.push(key.clone());
+                        }
+                    });
+                    out.push(contents);
+                    break;
+                } else {
+                    sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
             }
         }
 
