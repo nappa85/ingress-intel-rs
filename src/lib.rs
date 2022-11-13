@@ -482,26 +482,10 @@ impl<'a> Intel<'a> {
         let tiles = &tiles_owned;
 
         // situation here is quite catastophic, every call can fail on the outer level, aka the call itself fails,
-        // but also on the inner level, aka the single tike key has an error
+        // but also on the inner level, aka the single tile key has an error
         // at this point we need to make everything retriable
-        let get_tiles = || async move {
-            let mut lock = tiles.lock().await;
-            let ids = lock
-                .iter_mut()
-                .filter_map(|(id, status)| {
-                    status.is_free().then(|| {
-                        *status = TileState::Busy;
-                        id.as_str()
-                    })
-                })
-                .take(25)
-                .collect::<Vec<_>>();
-            let body = json!({
-                "tileKeys": ids,
-                "v": api_version,
-            });
-            drop(lock);
 
+        let inner_call = |body| async move {
             let req = self
                 .client
                 .request(Method::POST, "https://intel.ingress.com/r/getEntities")
@@ -516,24 +500,45 @@ impl<'a> Intel<'a> {
                     Error::EntityRequest
                 })?;
 
-            let res =
-                call(&self.client, req, &self.cookie_store).await?.json::<entities::IntelResponse>().await.map_err(
-                    |e| {
-                        error!("error deserializing entities response: {}", e);
-                        Error::Deserialize
-                    },
-                )?;
+            call(&self.client, req, &self.cookie_store).await?.json::<entities::IntelResponse>().await.map_err(|e| {
+                error!("error deserializing entities response: {}", e);
+                Error::Deserialize
+            })
+        };
 
+        let get_tiles = || async {
             let mut lock = tiles.lock().await;
-            for (id, res) in res.result.map.into_iter() {
-                if let entities::IntelResult::Entities(portals) = res {
-                    lock.insert(id, TileState::Done(portals));
-                } else {
+            let ids = lock
+                .iter_mut()
+                .filter_map(|(id, status)| {
+                    status.is_free().then(|| {
+                        *status = TileState::Busy;
+                        id.clone()
+                    })
+                })
+                .take(25)
+                .collect::<Vec<_>>();
+            let body = json!({
+                "tileKeys": ids,
+                "v": api_version,
+            });
+            drop(lock);
+
+            if let Ok(res) = inner_call(body).await {
+                let mut lock = tiles.lock().await;
+                for (id, res) in res.result.map.into_iter() {
+                    if let entities::IntelResult::Entities(portals) = res {
+                        lock.insert(id, TileState::Done(portals));
+                    } else {
+                        lock.insert(id, TileState::Free);
+                    }
+                }
+            } else {
+                let mut lock = tiles.lock().await;
+                for id in ids {
                     lock.insert(id, TileState::Free);
                 }
             }
-
-            Ok::<_, Error>(())
         };
 
         let get_counts = || async {
@@ -559,12 +564,16 @@ impl<'a> Intel<'a> {
             }
 
             let calls = free / 25 + usize::from(free % 25 > 0);
-            let iter = repeat(()).map(|_| async { get_tiles().await.ok() }).take(calls);
+            let iter = repeat(())
+                .map(|_| async {
+                    get_tiles().await;
+                })
+                .take(calls);
             FuturesUnordered::from_iter(iter).for_each(|_| future::ready(())).await;
         }
 
-        let lock = tiles_owned.into_inner();
-        Ok(lock.into_iter().map(|(_, status)| status.unwrap()).collect::<Vec<_>>())
+        let tiles = tiles_owned.into_inner();
+        Ok(tiles.into_iter().map(|(_, status)| status.unwrap()).collect::<Vec<_>>())
     }
 
     /// Retrieves informations for a given portal
