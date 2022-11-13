@@ -7,8 +7,12 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::future;
+use std::iter::repeat;
 use std::{borrow::Cow, time::Duration};
 
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use reqwest::{Client, Method, Request, Response};
 
 use once_cell::sync::{Lazy, OnceCell};
@@ -19,6 +23,7 @@ use percent_encoding::percent_decode_str;
 
 use serde_json::{json, value::Value};
 
+use tokio::sync::Mutex;
 use tokio::{sync::RwLock, time::sleep};
 
 use tracing::error;
@@ -459,7 +464,7 @@ impl<'a> Intel<'a> {
         min_level: Option<u8>,
         max_level: Option<u8>,
         health: Option<u8>,
-    ) -> Result<Vec<entities::IntelResponse>, Error> {
+    ) -> Result<Vec<entities::IntelEntities>, Error> {
         self.login().await?;
 
         let api_version = self.api_version.get().ok_or_else(|| {
@@ -471,10 +476,30 @@ impl<'a> Intel<'a> {
             Error::CsrfToken
         })?;
 
-        // situation here is quire catastophic, every call can fail on the outer level, aka the call itself fails,
+        let tile_keys = get_tile_keys_in_range(from, to, zoom, min_level, max_level, health);
+        let tiles_owned = Mutex::new(tile_keys.into_iter().map(|id| (id, TileState::Free)).collect::<HashMap<_, _>>());
+        let tiles = &tiles;
+        // situation here is quite catastophic, every call can fail on the outer level, aka the call itself fails,
         // but also on the inner level, aka the single tike key has an error
         // at this point we need to make everything retriable
-        let get_tiles = |body| async move {
+        let get_tiles = || async move {
+            let mut lock = tiles.lock().await;
+            let ids = lock
+                .iter_mut()
+                .filter_map(|(id, status)| {
+                    status.is_free().then(|| {
+                        *status = TileState::Busy;
+                        id.as_str()
+                    })
+                })
+                .take(25)
+                .collect::<Vec<_>>();
+            let body = json!({
+                "tileKeys": ids,
+                "v": api_version,
+            });
+            drop(lock);
+
             let req = self
                 .client
                 .request(Method::POST, "https://intel.ingress.com/r/getEntities")
@@ -489,40 +514,54 @@ impl<'a> Intel<'a> {
                     Error::EntityRequest
                 })?;
 
-            call(&self.client, req, &self.cookie_store).await?.json::<entities::IntelResponse>().await.map_err(|e| {
-                error!("error deserializing entities response: {}", e);
-                Error::Deserialize
-            })
-        };
+            let res =
+                call(&self.client, req, &self.cookie_store).await?.json::<entities::IntelResponse>().await.map_err(
+                    |e| {
+                        error!("error deserializing entities response: {}", e);
+                        Error::Deserialize
+                    },
+                )?;
 
-        let mut tile_keys = get_tile_keys_in_range(from, to, zoom, min_level, max_level, health);
-        let mut out = Vec::new();
-        while !tile_keys.is_empty() {
-            tracing::debug!("{} tile keys in queue", tile_keys.len());
-            let mut new = tile_keys.split_off(25.min(tile_keys.len()));
-            std::mem::swap(&mut new, &mut tile_keys);
-            loop {
-                let body = json!({
-                    "tileKeys": new,
-                    "v": api_version,
-                });
-                let res = get_tiles(body).await;
-                if let Ok(contents) = res {
-                    contents.result.map.iter().for_each(|(key, value)| {
-                        if matches!(value, entities::IntelResult::Error(_)) {
-                            tile_keys.push(key.clone());
-                        }
-                    });
-                    out.push(contents);
-                    break;
+            let mut lock = tiles.lock().await;
+            for (id, res) in res.result.map.into_iter() {
+                if let entities::IntelResult::Entities(portals) = res {
+                    lock.insert(id, TileState::Done(portals));
                 } else {
-                    sleep(Duration::from_secs(1)).await;
-                    continue;
+                    lock.insert(id, TileState::Free);
                 }
             }
+
+            Ok::<_, Error>(())
+        };
+
+        let get_count = || async {
+            let lock = tiles.lock().await;
+            let count = lock.iter().filter(|(_, status)| status.is_free()).count();
+            if count == 0 {
+                None
+            } else {
+                Some(count)
+            }
+        };
+
+        let mut first = true;
+        while let Some(count) = get_count().await {
+            tracing::debug!("{count} tile keys in queue");
+
+            if first {
+                first = false;
+            } else {
+                //sleep 1 second between batches
+                sleep(Duration::from_secs(1)).await;
+            }
+
+            let calls = count / 25 + usize::from(count % 25 > 0);
+            let iter = repeat(()).map(|_| async { get_tiles().await.ok() }).take(calls);
+            FuturesUnordered::from_iter(iter).for_each(|_| future::ready(())).await;
         }
 
-        Ok(out)
+        let lock = tiles_owned.into_inner();
+        Ok(lock.into_iter().map(|(_, status)| status.unwrap()).collect::<Vec<_>>())
     }
 
     /// Retrieves informations for a given portal
@@ -606,6 +645,26 @@ impl<'a> Intel<'a> {
             error!("error deserializing portal details response: {}", e);
             Error::Deserialize
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+enum TileState {
+    Free,
+    Busy,
+    Done(entities::IntelEntities),
+}
+
+impl TileState {
+    fn is_free(&self) -> bool {
+        matches!(self, TileState::Free)
+    }
+    fn unwrap(self) -> entities::IntelEntities {
+        if let TileState::Done(res) = self {
+            res
+        } else {
+            unreachable!()
+        }
     }
 }
 
