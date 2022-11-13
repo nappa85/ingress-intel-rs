@@ -38,7 +38,7 @@ pub struct IntelError {
 }
 
 /// endpoint ok type
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct IntelEntities {
     /// "gameEntities" node
     #[serde(rename = "gameEntities")]
@@ -46,7 +46,7 @@ pub struct IntelEntities {
 }
 
 /// endpoint main entity
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct IntelEntity(String, i64, Vec<Value>);
 
 impl IntelEntity {

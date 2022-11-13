@@ -536,19 +536,20 @@ impl<'a> Intel<'a> {
             Ok::<_, Error>(())
         };
 
-        let get_count = || async {
+        let get_counts = || async {
             let lock = tiles.lock().await;
-            let count = lock.iter().filter(|(_, status)| status.is_free()).count();
-            if count == 0 {
+            let free = lock.iter().filter(|(_, status)| status.is_free()).count();
+            let not_done = lock.iter().filter(|(_, status)| !status.is_done()).count();
+            if not_done == 0 {
                 None
             } else {
-                Some(count)
+                Some((free, not_done))
             }
         };
 
         let mut first = true;
-        while let Some(count) = get_count().await {
-            tracing::debug!("{count} tile keys in queue");
+        while let Some((free, not_done)) = get_counts().await {
+            tracing::debug!("{not_done} tile keys in queue");
 
             if first {
                 first = false;
@@ -557,7 +558,7 @@ impl<'a> Intel<'a> {
                 sleep(Duration::from_secs(1)).await;
             }
 
-            let calls = count / 25 + usize::from(count % 25 > 0);
+            let calls = free / 25 + usize::from(free % 25 > 0);
             let iter = repeat(()).map(|_| async { get_tiles().await.ok() }).take(calls);
             FuturesUnordered::from_iter(iter).for_each(|_| future::ready(())).await;
         }
@@ -650,7 +651,7 @@ impl<'a> Intel<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum TileState {
     Free,
     Busy,
@@ -660,6 +661,9 @@ enum TileState {
 impl TileState {
     fn is_free(&self) -> bool {
         matches!(self, TileState::Free)
+    }
+    fn is_done(&self) -> bool {
+        matches!(self, TileState::Done(_))
     }
     fn unwrap(self) -> entities::IntelEntities {
         if let TileState::Done(res) = self {
