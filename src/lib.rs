@@ -568,7 +568,7 @@ impl<'a> Intel<'a> {
                 .map(|_| async {
                     get_tiles().await;
                 })
-                .take(calls);
+                .take(calls.min(10)); // make max 10 calls at time
             FuturesUnordered::from_iter(iter).for_each(|_| future::ready(())).await;
         }
 
