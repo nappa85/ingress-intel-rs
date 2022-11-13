@@ -479,7 +479,8 @@ impl<'a> Intel<'a> {
 
         let tile_keys = get_tile_keys_in_range(from, to, zoom, min_level, max_level, health);
         let tiles_owned = Mutex::new(tile_keys.into_iter().map(|id| (id, TileState::Free)).collect::<HashMap<_, _>>());
-        let tiles = &tiles;
+        let tiles = &tiles_owned;
+
         // situation here is quite catastophic, every call can fail on the outer level, aka the call itself fails,
         // but also on the inner level, aka the single tike key has an error
         // at this point we need to make everything retriable
