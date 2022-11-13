@@ -498,6 +498,7 @@ impl<'a> Intel<'a> {
         let mut tile_keys = get_tile_keys_in_range(from, to, zoom, min_level, max_level, health);
         let mut out = Vec::new();
         while !tile_keys.is_empty() {
+            tracing::debug!("{} tile keys in queue", tile_keys.len());
             let mut new = tile_keys.split_off(25.min(tile_keys.len()));
             std::mem::swap(&mut new, &mut tile_keys);
             let body = json!({
@@ -651,7 +652,7 @@ mod tests {
 
         if let (Some(latitude), Some(longitude)) = (*LATITUDE, *LONGITUDE) {
             info!(
-                "get_entities_around {:?}",
+                "get_entities_around {:#?}",
                 intel.get_entities_around(latitude, longitude, *ZOOM, *MIN_LEVEL, None, None).await.unwrap()
             );
         }
@@ -659,7 +660,7 @@ mod tests {
             (*LATITUDE_FROM, *LONGITUDE_FROM, *LATITUDE_TO, *LONGITUDE_TO)
         {
             info!(
-                "get_entities_in_range {:?}",
+                "get_entities_in_range {:#?}",
                 intel
                     .get_entities_in_range(
                         (latitude_from, longitude_from),
