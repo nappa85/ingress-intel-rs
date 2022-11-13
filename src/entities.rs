@@ -57,17 +57,10 @@ impl IntelEntity {
 
     /// returns entity id
     pub fn get_id(&self) -> Option<&str> {
-        match self.2.get(0).and_then(Value::as_str) {
-            Some("p") => Some(&self.0),
-            Some("e") => {
-                if let Some(v) = self.2.get(2) {
-                    v.as_str()
-                } else {
-                    warn!("Entity without id: {:?}", self);
-                    None
-                }
-            }
-            _ => None,
+        if self.is_portal() {
+            Some(&self.0)
+        } else {
+            None
         }
     }
 
@@ -113,38 +106,18 @@ impl IntelEntity {
 
     /// returns faction if entity is a portal
     pub fn get_faction(&self) -> Option<Faction> {
-        match self.2.get(0).and_then(Value::as_str) {
-            Some("p") => {
-                if let Some(v) = self.2.get(1) {
-                    match v.as_str() {
-                        Some("E") => Some(Faction::Enlightened),
-                        Some("R") => Some(Faction::Resistance),
-                        _ => {
-                            warn!("Unknown faction {:?}", self);
-                            None
-                        }
-                    }
-                } else {
-                    warn!("Portal without faction: {:?}", self);
+        if let Some(v) = self.2.get(1) {
+            match v.as_str() {
+                Some("E") => Some(Faction::Enlightened),
+                Some("R") => Some(Faction::Resistance),
+                _ => {
+                    warn!("Unknown faction {:?}", self);
                     None
                 }
             }
-            Some("e") => {
-                if let Some(v) = self.2.get(1) {
-                    match v.as_str() {
-                        Some("E") => Some(Faction::Enlightened),
-                        Some("R") => Some(Faction::Resistance),
-                        _ => {
-                            warn!("Unknown faction {:?}", self);
-                            None
-                        }
-                    }
-                } else {
-                    warn!("Entity without faction: {:?}", self);
-                    None
-                }
-            }
-            _ => None,
+        } else {
+            warn!("Entity without faction: {:?}", self);
+            None
         }
     }
 
