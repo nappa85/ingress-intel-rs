@@ -5,14 +5,9 @@
 //!
 //! Ingress Intel API interface in pure Rust
 
-use std::collections::HashMap;
-use std::fmt;
-use std::future;
-use std::iter::repeat;
-use std::{borrow::Cow, time::Duration};
+use std::{borrow::Cow, collections::HashMap, fmt, iter::repeat, time::Duration};
 
-use futures_util::stream::FuturesUnordered;
-use futures_util::StreamExt;
+use futures_util::stream::{iter, StreamExt};
 
 use reqwest::{Client, Method, Request, Response};
 
@@ -24,8 +19,9 @@ use percent_encoding::percent_decode_str;
 
 use serde_json::{json, value::Value};
 
-use tokio::sync::Mutex;
-use tokio::{sync::RwLock, time::sleep};
+use stream_throttle::{ThrottlePool, ThrottleRate, ThrottledStream};
+
+use tokio::sync::{Mutex, RwLock};
 
 use tracing::error;
 
@@ -518,6 +514,9 @@ impl<'a> Intel<'a> {
                 })
                 .take(25)
                 .collect::<Vec<_>>();
+            if ids.is_empty() {
+                return;
+            }
             let body = json!({
                 "tileKeys": ids,
                 "v": api_version,
@@ -544,33 +543,19 @@ impl<'a> Intel<'a> {
         let get_counts = || async {
             let lock = tiles.lock().await;
             let free = lock.iter().filter(|(_, status)| status.is_free()).count();
-            let not_done = lock.iter().filter(|(_, status)| !status.is_done()).count();
-            if not_done == 0 {
-                None
-            } else {
-                Some((free, not_done))
-            }
+            let busy = lock.iter().filter(|(_, status)| status.is_busy()).count();
+            let done = lock.iter().filter(|(_, status)| status.is_done()).count();
+            tracing::debug!("{free} free, {busy} busy, {done} done");
+            free + busy > 0
         };
 
-        let mut first = true;
-        while let Some((free, not_done)) = get_counts().await {
-            tracing::debug!("{not_done} tile keys in queue");
-
-            if first {
-                first = false;
-            } else {
-                //sleep 1 second between batches
-                sleep(Duration::from_secs(1)).await;
-            }
-
-            let calls = free / 25 + usize::from(free % 25 > 0);
-            let iter = repeat(())
-                .map(|_| async {
-                    get_tiles().await;
-                })
-                .take(calls.min(10)); // make max 10 calls at time
-            FuturesUnordered::from_iter(iter).for_each(|_| future::ready(())).await;
-        }
+        let rate = ThrottleRate::new(1, Duration::from_secs(1));
+        let pool = ThrottlePool::new(rate);
+        iter(repeat(()))
+            .throttle(pool) // this motherfucker requires Stream + 'static
+            .take_while(|_| get_counts())
+            .for_each_concurrent(None, |_| get_tiles())
+            .await;
 
         let tiles = tiles_owned.into_inner();
         Ok(tiles.into_iter().map(|(_, status)| status.unwrap()).collect::<Vec<_>>())
@@ -670,6 +655,9 @@ enum TileState {
 impl TileState {
     fn is_free(&self) -> bool {
         matches!(self, TileState::Free)
+    }
+    fn is_busy(&self) -> bool {
+        matches!(self, TileState::Busy)
     }
     fn is_done(&self) -> bool {
         matches!(self, TileState::Done(_))
