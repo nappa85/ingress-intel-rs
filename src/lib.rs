@@ -453,6 +453,7 @@ impl<'a> Intel<'a> {
     }
 
     /// Retrieves entities informations for a given point
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_entities_in_range(
         &self,
         from: (f64, f64),
@@ -461,6 +462,7 @@ impl<'a> Intel<'a> {
         min_level: Option<u8>,
         max_level: Option<u8>,
         health: Option<u8>,
+        rate_limit: (usize, Duration),
     ) -> Result<Vec<entities::IntelEntities>, Error> {
         self.login().await?;
 
@@ -549,7 +551,7 @@ impl<'a> Intel<'a> {
             free + busy > 0
         };
 
-        let rate = ThrottleRate::new(1, Duration::from_secs(1));
+        let rate = ThrottleRate::new(rate_limit.0, rate_limit.1);
         let pool = ThrottlePool::new(rate);
         iter(repeat(()))
             .throttle(pool) // this motherfucker requires Stream + 'static
@@ -673,7 +675,7 @@ impl TileState {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::{env, time::Duration};
 
     use once_cell::sync::Lazy;
 
@@ -733,7 +735,8 @@ mod tests {
                         *ZOOM,
                         *MIN_LEVEL,
                         None,
-                        None
+                        None,
+                        (40, Duration::from_secs(60)),
                     )
                     .await
                     .unwrap()
