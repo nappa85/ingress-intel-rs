@@ -560,7 +560,7 @@ impl<'a> Intel<'a> {
             .await;
 
         let tiles = tiles_owned.into_inner();
-        Ok(tiles.into_iter().map(|(_, status)| status.unwrap()).collect::<Vec<_>>())
+        Ok(tiles.into_values().map(TileState::unwrap).collect::<Vec<_>>())
     }
 
     /// Retrieves informations for a given portal

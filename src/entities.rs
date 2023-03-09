@@ -110,6 +110,7 @@ impl IntelEntity {
             match v.as_str() {
                 Some("E") => Some(Faction::Enlightened),
                 Some("R") => Some(Faction::Resistance),
+                Some("M") => Some(Faction::Machina),
                 _ => {
                     warn!("Unknown faction {:?}", self);
                     None
@@ -141,6 +142,8 @@ pub enum Faction {
     Enlightened,
     /// Resistance
     Resistance,
+    /// Machina
+    Machina,
 }
 
 impl Faction {
@@ -151,5 +154,9 @@ impl Faction {
     /// checks if resistance
     pub fn is_resistance(&self) -> bool {
         matches!(self, Faction::Resistance)
+    }
+    /// checks if machina
+    pub fn is_machina(&self) -> bool {
+        matches!(self, Faction::Machina)
     }
 }

@@ -66,6 +66,7 @@ impl IntelPortal {
         match self.1.as_str() {
             "E" => Some(Faction::Enlightened),
             "R" => Some(Faction::Resistance),
+            "M" => Some(Faction::Machina),
             _ => {
                 warn!("Unknown faction {}", self.1);
                 None
