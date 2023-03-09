@@ -108,6 +108,7 @@ impl IntelEntity {
     pub fn get_faction(&self) -> Option<Faction> {
         if let Some(v) = self.2.get(1) {
             match v.as_str() {
+                Some("N") => Some(Faction::Neutral),
                 Some("E") => Some(Faction::Enlightened),
                 Some("R") => Some(Faction::Resistance),
                 Some("M") => Some(Faction::Machina),
@@ -138,6 +139,8 @@ impl IntelEntity {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 /// Factions
 pub enum Faction {
+    /// Neutral
+    Neutral,
     /// Enlightened
     Enlightened,
     /// Resistance
@@ -147,6 +150,10 @@ pub enum Faction {
 }
 
 impl Faction {
+    /// checks if neutral
+    pub fn is_neutral(&self) -> bool {
+        matches!(self, Faction::Neutral)
+    }
     /// checks if enlightened
     pub fn is_enlightened(&self) -> bool {
         matches!(self, Faction::Enlightened)

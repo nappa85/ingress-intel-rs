@@ -64,6 +64,7 @@ impl IntelPortal {
     /// returns portal level
     pub fn get_faction(&self) -> Option<Faction> {
         match self.1.as_str() {
+            "N" => Some(Faction::Neutral),
             "E" => Some(Faction::Enlightened),
             "R" => Some(Faction::Resistance),
             "M" => Some(Faction::Machina),
