@@ -89,9 +89,8 @@ impl TileKey {
         let to_y = y1.max(y2);
 
         (from_x..=to_x)
-            .into_iter()
             .flat_map(|x| {
-                (from_y..=to_y).into_iter().map(move |y| TileKey {
+                (from_y..=to_y).map(move |y| TileKey {
                     zoom,
                     x,
                     y,

@@ -46,7 +46,7 @@ static FACEBOOK_LOGIN_FORM: Lazy<Regex> = Lazy::new(|| {
 static INPUT_FIELDS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<input([^>]+)>"#).unwrap());
 static INPUT_ATTRIBUTES: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^\s="]+)="([^"]+)""#).unwrap());
 // static COOKIE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"([^=]+)=([^;]+)"#).unwrap());
-static API_VERSION: Lazy<Regex> = Lazy::new(|| Regex::new(r#"/jsc/gen_dashboard_(\w+)\.js"#).unwrap());
+static API_VERSION: Lazy<Regex> = Lazy::new(|| Regex::new(r"/jsc/gen_dashboard_(\w+)\.js").unwrap());
 
 /// Error types
 #[derive(Debug)]
