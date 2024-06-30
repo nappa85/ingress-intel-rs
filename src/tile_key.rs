@@ -6,7 +6,7 @@ const DEFAULT_ZOOM: u8 = 15;
 static TILES_PER_EDGE: [u16; 16] = [1, 1, 1, 40, 40, 80, 80, 320, 1000, 2000, 2000, 4000, 8000, 16000, 16000, 32000];
 
 fn get_tiles_per_edge(zoom: u8) -> f64 {
-    TILES_PER_EDGE[zoom.min(15).max(3) as usize].into()
+    TILES_PER_EDGE[zoom.clamp(3, 15) as usize].into()
 }
 
 fn lat2tile(latitude: f64, tiles_per_edge: f64) -> i64 {
