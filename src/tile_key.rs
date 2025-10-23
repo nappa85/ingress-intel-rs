@@ -1,5 +1,4 @@
-use std::f64::consts::PI;
-use std::ops::Add;
+use std::{f64::consts::PI, ops::Add};
 
 const DEFAULT_ZOOM: u8 = 15;
 
