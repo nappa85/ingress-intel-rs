@@ -1,5 +1,4 @@
-use std::f64::consts::PI;
-use std::ops::Add;
+use std::{f64::consts::PI, fmt, num::ParseIntError, ops::Add, str::FromStr};
 
 const DEFAULT_ZOOM: u8 = 15;
 
@@ -35,7 +34,7 @@ fn tile2lng(x: i64, tiles_per_edge: f64) -> f64 {
     (x as f64) / tiles_per_edge * 360_f64 - 180_f64
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TileKey {
     pub zoom: u8,
     pub x: i64,
@@ -67,7 +66,6 @@ impl TileKey {
         }
     }
 
-    #[allow(dead_code)]
     pub fn range(
         (from_lat, from_lng): (f64, f64),
         (to_lat, to_lng): (f64, f64),
@@ -75,7 +73,7 @@ impl TileKey {
         min_level: Option<u8>,
         max_level: Option<u8>,
         health: Option<u8>,
-    ) -> Vec<Self> {
+    ) -> impl Iterator<Item = Self> {
         let zoom = zoom.unwrap_or(DEFAULT_ZOOM);
         let tiles_per_edge = get_tiles_per_edge(zoom);
 
@@ -88,18 +86,24 @@ impl TileKey {
         let to_x = x1.max(x2);
         let to_y = y1.max(y2);
 
-        (from_x..=to_x)
-            .flat_map(|x| {
-                (from_y..=to_y).map(move |y| TileKey {
-                    zoom,
-                    x,
-                    y,
-                    min_level: min_level.unwrap_or_default(),
-                    max_level: max_level.unwrap_or(8),
-                    health: health.unwrap_or(100),
-                })
+        (from_x..=to_x).flat_map(move |x| {
+            (from_y..=to_y).map(move |y| TileKey {
+                zoom,
+                x,
+                y,
+                min_level: min_level.unwrap_or_default(),
+                max_level: max_level.unwrap_or(8),
+                health: health.unwrap_or(100),
             })
-            .collect()
+        })
+    }
+
+    pub fn square(self, side: u8) -> impl Iterator<Item = Self> {
+        (self.x..(self.x + i64::from(side))).zip(self.y..(self.y + i64::from(side))).map(move |(x, y)| Self {
+            x,
+            y,
+            ..self
+        })
     }
 }
 
@@ -113,9 +117,56 @@ impl Add<(i64, i64)> for TileKey {
     }
 }
 
-impl std::fmt::Display for TileKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for TileKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}_{}_{}_{}_{}_{}", self.zoom, self.x, self.y, self.min_level, self.max_level, self.health)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TileKeyFromStrError {
+    #[error("Missing {0}")]
+    Missing(&'static str),
+    #[error("Invalid {0}: {1}")]
+    Invalid(&'static str, ParseIntError),
+}
+
+impl FromStr for TileKey {
+    type Err = TileKeyFromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut iter = s.split('_');
+        let zoom = iter
+            .next()
+            .ok_or(TileKeyFromStrError::Missing("zoom"))?
+            .parse()
+            .map_err(|err| TileKeyFromStrError::Invalid("zoom", err))?;
+        let x = iter
+            .next()
+            .ok_or(TileKeyFromStrError::Missing("x"))?
+            .parse()
+            .map_err(|err| TileKeyFromStrError::Invalid("x", err))?;
+        let y = iter
+            .next()
+            .ok_or(TileKeyFromStrError::Missing("y"))?
+            .parse()
+            .map_err(|err| TileKeyFromStrError::Invalid("y", err))?;
+        let min_level = iter
+            .next()
+            .ok_or(TileKeyFromStrError::Missing("min_level"))?
+            .parse()
+            .map_err(|err| TileKeyFromStrError::Invalid("min_level", err))?;
+        let max_level = iter
+            .next()
+            .ok_or(TileKeyFromStrError::Missing("max_level"))?
+            .parse()
+            .map_err(|err| TileKeyFromStrError::Invalid("max_level", err))?;
+        let health = iter
+            .next()
+            .ok_or(TileKeyFromStrError::Missing("health"))?
+            .parse()
+            .map_err(|err| TileKeyFromStrError::Invalid("health", err))?;
+        Ok(Self { zoom, x, y, min_level, max_level, health })
     }
 }
 
@@ -142,7 +193,8 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .collect::<Vec<_>>();
         assert!(!tks.is_empty());
         for tk in tks {
             let lat = super::tile2lat(tk.y, tiles_per_edge);
