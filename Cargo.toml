@@ -1,6 +1,6 @@
 [package]
 name = "ingress_intel_rs"
-version = "0.8.1"
+version = "0.8.2"
 authors = ["Marco Napetti <marco.napetti@gmail.com>"]
 edition = "2024"
 
@@ -21,6 +21,6 @@ thiserror = "2.0"
 
 [dev-dependencies]
 serde_path_to_error = "0.1"
-test-with = "0.16"
+test-with = "0.17"
 tokio = { version = "1.38", features = ["sync", "macros", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
